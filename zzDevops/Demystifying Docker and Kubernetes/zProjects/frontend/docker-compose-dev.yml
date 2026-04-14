@@ -1,0 +1,19 @@
+version: '3'
+services:
+  web:
+    build:
+      context: .  # "." mean current directory, if your custom docker file is nested in bar folder, then it is "./bar"
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3000:3000"
+    volumes:
+      - /home/node/app/node_modules
+      - .:/home/node/app
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - /home/node/app/node_modules
+      - .:/home/node/app
+    command: ["npm", "run", "test"]  # override the default startup CMD in the docker file

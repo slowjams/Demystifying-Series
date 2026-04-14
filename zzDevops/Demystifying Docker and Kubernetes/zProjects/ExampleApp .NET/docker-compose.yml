@@ -1,0 +1,54 @@
+﻿version: '3'
+
+services:
+  mysql:
+    image: 'mysql:8.0.0'
+    volumes:
+      - productdata:/var/lib/mysql
+    networks:
+      - backend
+    environment:
+      - MYSQL_ROOT_PASSWORD=mysecret
+      - bind-address=0.0.0.0
+
+  dbinit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    networks:
+      - backend
+    environment:
+      - INITDB=true
+      - DBHOST=mysql
+    depends_on:
+      - mysql
+
+  mvc:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    networks:
+      - backend
+      - frontend
+    environment:
+      - DBHOST=mysql
+    depends_on:
+      - mysql
+
+  loadbalancer:
+    image: dockercloud/haproxy:1.2.1
+    ports:
+      - '3000:80'
+    links:
+      - mvc
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # <-------cannot connect to localhost:3000, probably because of this line cannot run properly in WSL
+    networks:
+      - frontend
+
+volumes:
+  productdata:
+
+networks:
+  frontend:
+  backend:

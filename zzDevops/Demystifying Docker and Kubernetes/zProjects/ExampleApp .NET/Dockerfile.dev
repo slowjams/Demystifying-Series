@@ -1,0 +1,15 @@
+FROM mcr.microsoft.com/dotnet/sdk:6.0
+
+COPY wait-for-it /tools/wait-for-it.sh
+
+RUN chmod +x /tools/wait-for-it.sh
+
+ENV DBHOST=dev_mysql WAITHOST=dev_mysql WAITPORT=3306
+
+EXPOSE 80
+
+VOLUME /app
+
+WORKDIR /app
+
+ENTRYPOINT dotnet restore && /tools/wait-for-it.sh $WAITHOST:$WAITPORT --timeout=0  && dotnet watch run --environment=Development

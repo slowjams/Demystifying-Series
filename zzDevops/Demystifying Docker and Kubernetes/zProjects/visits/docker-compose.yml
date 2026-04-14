@@ -1,0 +1,9 @@
+version: '3'
+services:
+  redis-server:
+    image: 'redis'
+  node-app:
+    restart: on-failure
+    build: .  # <------------locate the DockerFile to generate a container from the image 
+    ports:
+      - '4001:8081'

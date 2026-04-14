@@ -1,0 +1,25 @@
+language: generic 
+sudo: required
+services:
+  - docker
+
+before_install:
+  - docker build -t slowjams/react-test -f ./client/Dockerfile.dev ./client # no need to specify dockerfile below since we uses non-dev default dockerfile
+
+script:
+  # by default "npm test" runs in a watch mode which never exits. However, travis needs to compare the exit code to indicate successful/failed build, that's why we use --coverage here
+  # - docker run slowjams/react-test npm test -- --coverage
+  - docker run -e CI=true slowjams/react-test npm test  # due to a change in how the Jest library works, we use this line (crazy frontend world) instead of the above one
+
+after_success:
+  - docker build -t slowjams/client ./client
+  - docker build -t slowjams/nginx ./nginx
+  - docker build -t slowjams/server ./server
+  - docker build -t slowjams/worker ./worker
+  # travis needs to Log into the docker CLI, so add docker username/password in travis as environment variables first
+  - echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_ID" --password-stdin
+  # take those images and push them to docker hub
+  - docker push slowjams/client
+  - docker push slowjams/nginx
+  - docker push slowjams/server
+  - docker push slowjams/worker
