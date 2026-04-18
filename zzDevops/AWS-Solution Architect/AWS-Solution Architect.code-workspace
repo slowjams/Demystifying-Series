@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../../../2-Courses/Docker and Kubernetes The Complete Course from Zero to Hero/zSourceCode/zDocker-main"
+		},
+		{
+			"path": "../../../2-Courses/Docker and Kubernetes The Complete Course from Zero to Hero/zSourceCode/zKubernetes-main"
+		}
+	],
+	"settings": {}
+}

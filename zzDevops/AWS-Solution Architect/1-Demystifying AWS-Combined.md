@@ -495,7 +495,42 @@ storage fees and DT fees applys on all classes
 
 note that **the storage class is assigned per object, not per bucket**. AWS calculates S3 storage costs on a daily basis. 
 
+Encrypting data in transit – HTTPS (SSL/TLS)
 
+
+# Encrypting data In Transit and At Rest 
+
+**In Transit**:  HTTPS (SSL/TLS)
+
+**At Rest**
+- Server-side encryption:
+  `SSE-S3`: should use this header: `"x-amz-server-side-encryption": "AES256"`, Generate one unique data encryption key (DEK) per object
+  
+  `SSE-KMS`: should use this header: `"x-amz-server-side-encryption": "aws:kms"` (since no master key is specified, S3 uses AWS-managed KMS key for S3: `aws/s3`), and if you want to use CMK (Customer Master Key) in KMS, then you need to use this additional header: `x-amz-server-side-encryption-aws-kms-key-id: <your-key-id-or-arn>`
+  
+  `SSE-C` (C means Customer, managed by the Customer), and it is **enabled by default which means s3 bucket objects are always stored in encrypted format**, and to be able to use `SSE-S3`, it needs to use `HTTPS`. Should use two headers: `"x-amz-server-side-encryption-customeralgorithm" : "AES256"` and `"x-amz-server-side-encryption-customer-key": Base64,256bit encryption key`
+  
+- Client-side encryption: S3 has no role in encryption or decryption, it is client's job and client can use **S3 Encryption Client** to handle the client-side encryption
+
+## SSE-S3 Vs SSE-KMS
+
+both (also SSE-C) use **Envelope Encryption** which refers to a **master key** which you don't use to encrypt data but use derived keys (DEK, which is the keys you use to encrypt/decript per object) created from this master key, **so each object are stored along with its unique derived key in S3 bucket**. For SSE-C, S3 generates and manages this master key (aka "KMS key")  and users cannot access it, and for SSE-KMS, master key is managed in KMS.
+Note that you don't need to worry about the overhead of each object needs to have its own derive keys, it is very tiny cost to create millions of DEKs from master key
+
+When using `SSE-KMS`, user must have IAM permissions
+• For `PutObject`: `kms:GenerateDataKey`
+• For `GetObject`: `kms:Decrypt`, `kms:DescribeKey`(pre-check if master key is valid, not expired etc)
+so if you get "Access Denied (KMS)" when reading/writing S3 objects, the cause is usually **missing kms:Decrypt or kms:GenerateDataKey in the KMS key policy**.
+
+note that you do NOT need permission to "read" the master key.In AWS Key Management Service:
+
+The KMS key (master key) is never exposed
+You cannot:
+❌ Download it
+❌ View its key material
+❌ Export it
+
+You only need to "use" the master key, which is the `kms:Decrypt` all about
 
 =====================================================================================================================================================================================
 
