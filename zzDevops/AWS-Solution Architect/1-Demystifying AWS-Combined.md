@@ -991,10 +991,10 @@ Task role → guest room key (only your room)
 ## RDS
 
 ```yml
-# Each RDS instance runs on one EC2 instance, AWS hides the uderlying EC2 infrastructure
+# Each RDS instance runs on one EC2 instance, AWS hides the uderlying EC2 infrastructure, and that's why RDS can have SG
 Primary RDS
  ┌──────────────┐
- │ EC2 Instance │
+ │ EC2 Instance │  <-----------can have Security Group
  │ CPU + RAM    │
  └──────────────┘
       │
@@ -1002,6 +1002,26 @@ Primary RDS
    Storage (EBS)
 ```
 
+1. RDS **Multi-AZ** Deployment ("Multi" is 2 AZs only):
+- Primary DB instance in one AZ and **Standby** Db instance(s) in another AZ
+- Application **reads and writes** from/to only Primary DB, so it is always one active working database instance
+- Data is **synchronously** replicated from Primary DB to Standby DB
+- In case of Primary DB failure or AZ failure, Standby DB is made Primary, and the DNS endpoint points to Standby, so applications automatically gets redirected to standby for read/write queries. No change required at application end
+- note that Multi-AZ is a High Availability solution, not a scaling solution as you can only read/write a single database at one time
+
+2. RDS Read Replicas
+- Create Read Replicas to scale the Read queries thereby relieving pressure on Primary DB
+- Data is **only written** to the Primary DB and **can be read from any of the read replicas**, users need to make app logic to read replicas via CQRS
+- Create up to **15 Read Replicas** in the same or different AWS region (for cross-region DTO charges apply)
+- Data is replicated **asynchronously** (unlike RDS Multi-AZ Deployment where data is synchronously replicated to StanbdBy instances), can have lag between different replicas
+- When creating a read replica of an existing database, you can also choose RDS Multi-AZ Deployment for this to-be-created read replica, so there will be a StandBy for this read replica.
+- Promote Read replica to standalone DB in case of failure of Primary DB instance. But since read replicas use async replication, lag can exceed 1 minutes
+
+note that if a database has no encryption in the first place, and if you need encryption later, you must take a snapshot of the database first -> then copy the snapshot with encryption ->
+restore a new encrypted DB. (there is no feature allow you to create an encrypted snapshot directly)
+
+
+## Aurora
 
 ```yml
 # RDS
@@ -1017,5 +1037,208 @@ Reader EC2 → Shared Storage Cluster
 Reader EC2 → Shared Storage Cluster
 # createing a read replica on Aurora is much quicker than RDS, since only need extra EC2 compute (shared storage already exists)
 ```
+```RDS
+AZ-1: DB + EBS (complete copy)
+AZ-2: DB + EBS (complete copy)
+AZ-3: DB + EBS (complete copy)
+```
+```Aurora
+AZ-1: storage node/shard A + B
+AZ-2: storage node/shard C + D
+AZ-3: storage node/shard E + F
+
+ALL SHARDS = ONE DATABASE STORAGE SYSTEM
+Each node stores only fragments (log segments)
+```
+
+Aurora stores a log-structured stream, split into chunks:
+```
+Log Stream:
+LSN 1000–1999 → Node 1
+LSN 2000–2999 → Node 2
+LSN 3000–3999 → Node 3
+...
+```
+when you write an record `INSERT INTO students VALUES (3, 'Charlie');` this becomes a log record: "LSN 1050 → INSERT Charlie", Aurora sends the log record to all 6 nodes:
+Each node responds:
+```
+Node	      Role for THIS write
+A	         stores + acknowledges
+B	         stores + acknowledges
+C	         stores + acknowledges
+D	         stores + acknowledges
+E	         may be delayed / backup
+F	         may be delayed / backup
+
+Commit happens when: 4 out of 6 nodes confirm write
+```
+all six Aurora storage nodes are intended to have the same data, providing redundancy and fault tolerance. However, due to replication lag (usually milliseconds), there may be very brief moments where not all nodes are perfectly in sync
+
+**Write quorum = 4/6**
+When you write:
+
+The write is considered successful once 4 out of 6 copies acknowledge
+You do NOT create new copies
+You are just requiring majority durability confirmation
+
+**Read quorum = 3/6**
+For reads:
+Aurora typically needs 3 copies to agree (remember write is considered successful once 4 out of 6 copies acknowledge, so 6-4+1 = 3)
+Again, no extra data is created
+Aurora is designed so that any 3 healthy copies are sufficient to guarantee correctness of the latest committed data
+
+when a read query is executed:
+- The compute node (reader or writer) receives the SQL read request.
+- The compute node determines which data pages or log segments are needed to satisfy the query.
+- The compute node requests the required data from the Aurora storage layer, which is distributed across six storage nodes in three Availability Zones.
+- The storage layer fetches the latest committed data by:
+  - Querying multiple storage nodes in parallel (typically 3 out of 6 for quorum).
+  - Using the highest Log Sequence Number (LSN) to ensure the most up-to-date data.
+  - Reconstructing data from fragments if needed.
+- The storage layer returns the data to the compute node, which processes and returns the query result.
+
+```
+SQL UPDATE
+   ↓
+Compute node modifies memory
+   ↓
+Generate redo log (LSN 1050)
+   ↓
+Send log to storage tier
+   ↓
+6 replicas store log
+   ↓
+4/6 ACK → commit (ACKs received by compute layer)
+   ↓
+Later for read quries, storage service rebuilds the required pages
+```
+
+The log records are replicated to all 6 storage nodes, not to all database compute nodes. Aurora storage reads from a quorum of 3 out of 6 storage nodes for a read query.
+When a read is requested, the storage layer queries 3 out of 6 nodes and compares their LSNs. The node(s) with the highest LSN have the latest data; if a node has a lower LSN, it is considered stale. Aurora returns data from the nodes with the highest LSN, ensuring the read is always up-to-date and consistent.
 
 
+**Why Aurora is better than RDS**:
+- Storage Layer Separation:
+Aurora separates compute (database instances) from storage. The storage layer handles replication and durability, so the database engine doesn’t wait for full synchronous replication to a standby instance as in RDS.
+
+- Quorum-Based Writes:
+Aurora only waits for a quorum (typically 4 out of 6 storage nodes) to acknowledge a write, not all replicas. RDS, in contrast, often waits for a full synchronous write to a single standby, which can be slower if there’s network latency.
+
+- Parallel, Distributed Replication:
+Aurora’s storage nodes replicate data in parallel across AZs, using a highly optimized, distributed protocol. This reduces the time needed for each write operation.
+
+- No Transaction Log Shipping:
+RDS uses log shipping to replicate changes to the standby, which introduces latency. Aurora writes redo log records directly to the storage layer, eliminating this bottleneck.
+
+- Faster Failover:
+Aurora can promote a new writer almost instantly because all nodes have access to the same distributed storage, while RDS must promote and catch up a standby.
+
+
+Cluster endpoint automatically points to current writer for writer  `mycluster.cluster-xxxx.us-east-1.rds.amazonaws.com` 
+
+Aurora's storage is always multi-AZ with 6 copies, while Aurora Multi-AZ deployments refer to the **compute layer** being highly available across AZs as well.
+
+
+## RDS Proxy
+
+1. **Handl RDS Multi-AZ failover**
+When an RDS Multi-AZ failover happens, the standby is promoted to primary, and the DNS endpoint is updated to point to the new primary instance (standby), note that DNS endpoint was pointed to failed writter instance before and client cache original IP address of DNS record, so until the DNS cache expires and updates, applications may try to connect to the old, now-inactive instance, resulting in connection errors. During failover, RDS Proxy quickly switches its backend connections to the new primary. Applications continue using the same proxy endpoint, experiencing minimal disruption and much faster recovery.
+
+2. **Reuse Database Connections**
+if you have a Lambda function that runs 1,000 times in a minute, each time needing to query the database.
+Without RDS Proxy: Each Lambda invocation opens a new database connection, runs a query, then closes the connection. This creates 1,000 new connections in a short time, which can overwhelm the RDS instance.
+With RDS Proxy: Each Lambda invocation connects to the proxy. RDS Proxy maintains a pool of, say, 50 open connections to the database. Each Lambda request is mapped to an available connection in the pool, reused for multiple invocations.
+
+
+## DynamoDB
+
+AWS's NoSQL database. AWS manages underlying infra, Data is:
+
+- automatically partitioned
+- replicated across multiple AZs
+- handled by AWS internally
+
+Since data is replicated to multiple AZs, so there is "lag" in AWS's internal nodes, so you can send 2 different read query: strongly consistent read, and eventually consistent read (cheaper because it returns stale value)
+
+and you cannot create a "database" but "table".
+Every item needs to have an unique of PartitionKey OR (PartitionKey, SortKey), SortKey is optional, and (PartitionKey, SortKey) can be considered as new ParitionKey
+
+`Query` - fetches specific items using PartitionKey
+`Scan`  – fetches every item of the table based other fields other than PartitionKey, inefficient, need to read all the records first then apply filters
+
+`Global Secondary Index`: craete a "sub-table" from base table using base table's other fields as ParitionKey
+
+Like S3, DynamoDB has **Standard** and **Standard IA**, both being charged by storage fees and `WCU` and `RCU` (Write/Read Capacity Unit), 5 WCU means "5 writes/sec for items up to 1 KB each", Standard IA means high cost for WCU and RCU compared to Standard
+
+`Global Table`: Replicas in different Regions, users in different regions can write data to it (in contrast to Aurora Global Database, updates can only be in a single primary write instance, other replicas in other regions can only be read replicas) and the change will be sync, replicated to other replicas globally, if there is a conflict in same record, "Last Writer Wins".
+
+`DynamoDB Accelerator` (DAX): DyanmoDB's Cache which natively suports DynamoDB APIs (Redis is not suitable in this case).
+```
+App -------→ DAX -------------→ DynamoDB (write)
+              ↓
+   wait for ACK from DynamoDB
+              ↓
+      update local cache
+              ↓
+       return success
+```
+
+======================================================================================================================================================================
+
+## CloudFront
+
+CloudFront has **Edge Locations** and **Regional Edge Locations**:
+
+1. Bypass public internet
+
+```Before CloudFront
+User → random ISP → transits → Germany origin
+```
+
+```With CloudFront
+User → nearest ISP peering → CloudFront edge (POP)
+
+* DNS → resolves CloudFront IP
+* BGP → routes to nearest POP using Anycast IP (same range block of ip range, and BGP resolve it to edge location based on user's location)
+```
+
+2. Cache and reuse connection
+
+```without cloudfront
++-------------+                         +------------------+
+| User Sydney | ---------------------> | Germany Origin   |
+| Browser     |   Public Internet      | HTTP Server      |
++-------------+                         +------------------+
+```
+
+```with cloudfront
++-------------+
+| User Sydney |
++-------------+
+        |
+        | 1. Request
+        v
++----------------------+
+| Sydney Edge Location |
+| CloudFront POP       |
++----------------------+
+        |
+        | 2. Cache miss
+        v
++------------------+
+| Germany Origin   |
+| HTTP Server      |
++------------------+
+```
+
+For dynamic APIs such as `POST /checkout`, CloudFront usually does NOT cache, But edge still helps:
+```
+Sydney Edge
+    ↓
+few persistent optimized Germany connections (so no more 250–300ms per handshake round trip)
+    ↓
+Germany Server
+```
+CloudFront keeps limited pool of persistent connections which are designed to be lightweight and scalable so it does not overwhelm the Germany server, and those connections can be shared with multiple users requests in Edge Locations
+
+note that in CDN language:Origin = the backend server that the CDN fetches content from
