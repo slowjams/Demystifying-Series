@@ -693,7 +693,7 @@ When an ASG is connected to an load balancer, when the ASG initiate/terminate an
 
 `DNS Zone`     : a database, for example  *.netflix.com (that's the zone) containing records
 `ZoneFile`     : the "file" storing the zone on disk
-`Name Server`  : a DNS server which hosts 1 or more Zones by storing 1 or more ZoneFiles
+`Name Server`  : a DNS server which hosts 1 or more Zones by storing 1 or more ZoneFiles, Name Server is a generic term that can contain: Root, TLD and Authoritative Servers
 `Authoritative`: contains real/genuine record (boss)
 `Non-Authoritative`/ `Cached`: copies of records/zones that saved as cached e.g. you internet provider or router can be this category as you have vistied some sites before
 
