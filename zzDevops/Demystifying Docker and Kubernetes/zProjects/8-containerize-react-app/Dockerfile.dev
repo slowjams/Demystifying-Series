@@ -1,0 +1,18 @@
+FROM node:22-alpine AS build
+
+WORKDIR /app
+
+COPY package*.json .
+
+# Temporarily adding --force to avoid underlying dependency conflicts
+# due to latest versions of react-scripts.
+RUN npm ci --force
+ 
+ENV CHOKIDAR_USEPOLLING=true
+ENV WATCHPACK_POLLING=true
+
+COPY . .
+CMD ["npm", "start"]
+
+
+# docker run --rm -d -p 3000:3000 -v ./public:/app/public -v ./src:/app/src react-app:dev

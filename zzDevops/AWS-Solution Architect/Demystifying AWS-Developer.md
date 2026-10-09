@@ -286,11 +286,11 @@ so Custom NACLs are **implicit deny** by default
 
 You can specify a Placement Groupt when launching an EC2 instance in the console UI.
 
-Background knowledge: Each rach has its own network and power source
+Background knowledge: Each rack has its own network and power source
 
 1. `Cluster`: instances are placed into **same rack** (same AZ of course) in datacentre, often same host, so lowest latency and 10Gbps speed communication between instances. However, it offer little resilient as if the physical fails all instances are down. When you create a cluster group, you don't specify an AZ, it is the first instance being placed into a AZ then the AZ is locked for further placements. Only certain supported instance type can be used with this cluter placement group
 
-2. `Spread`: maximize resilient by placing each instance into **distict rack** across mutiple AZs (each instance runs from a different rack. Inside a same AZ, each difference still run on different rack). For example, you want to lauch 6 instances, then 3 (a, b, c) instances are in AZA, 3 (d, e, f) instances are in AZB, for instance in same AZ, each instance are placed into distict rack physical hardware, so that if one fails e.g `a`'s rack's physical machine got power down, the rest of 2 instances (b, c) are still working. Spread placement has a limit of **maximum 7 instance per AZ**. Not supported for Dedicated Instances or Hosts
+2. `Spread`: maximize resilient by placing each instance into **distict rack** in same AZ. Spread placement has a limit of **maximum 7 instance per AZ**. Not supported for Dedicated Instances or Hosts
 
 3. `Partition`: similar to Spread, but it is **maximum 7 partition group per AZ**, inside a partition group, you can lauch as many as instance you want. Each partition group has its own rack. You can choose the partition to lauch an instance or auto placed
 

@@ -1,0 +1,9 @@
+services:
+  notebooks:
+    networks:
+      - compose-net
+  notes:
+    networks:
+      - compose-net
+
+

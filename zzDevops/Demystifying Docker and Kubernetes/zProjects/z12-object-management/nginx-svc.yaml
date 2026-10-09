@@ -1,0 +1,19 @@
+# for documentation purposes, equivalent to the imperative commands:
+# kubectl expose pod nginx-pod --type=NodePort --port=80 --target-port=80
+apiVersion: v1
+
+kind: Service
+
+metadata:
+  name: nginx-svc
+  labels:
+    app: nginx  # <----------just to associate the Service with the Pod, it doesn't have any effect on the Service itself
+
+spec:
+  type: NodePort
+  ports:
+    - port: 80
+      protocol: TCP
+      targetPort: 80
+  selector:
+    app: nginx  # <----------k8s will look for the Pod with this label and forward traffic to them

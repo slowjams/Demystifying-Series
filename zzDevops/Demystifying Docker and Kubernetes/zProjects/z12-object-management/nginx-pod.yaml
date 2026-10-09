@@ -1,0 +1,20 @@
+# for documentation, equivalent to the imperative command:
+# kubectl run nginx-pod --image=nginx:1.27.0
+apiVersion: v1
+
+kind: Pod
+
+metadata:
+  name: nginx-pod
+  labels:
+    app: nginx
+  # annotations:
+  #   description: "Nginx pod for learning purposes"
+
+spec:
+  containers:
+    - name: nginx-container
+      image: nginx:1.27.0-alpine
+      ports:
+        - containerPort: 80   # <-------------only for metadata documentation, it doesn't make Nginx listen on port 80 so that tools such as 
+                              # dashboards, monitoring systems etc. can use this information to understand what ports the container declares

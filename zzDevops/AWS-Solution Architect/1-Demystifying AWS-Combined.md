@@ -39,6 +39,14 @@ SessionContext:  ## <-----------these info can be represented by session-token, 
 # you migh ask why aws doesn't use SecretAccessKey to encrypt SessionContext,
 # if secretAccessKey is used to sign sessionContext, then aws users can tamper the role name in SessionContext to get unauthenticated priviledge
 ```
+
+Analogy: Think of the keys as a badge and a PIN. The badge identifies who you are; the PIN proves you possess it.
+The session token is like a temporary visitor pass that says:
+- "this badge is only valid today"
+- "this visitor may only go to floor 5"
+- "this pass was issued for a specific visit"
+Without that pass, you have the badge and PIN, but no evidence of the temporary session rules.
+
 note that the **design idea of storing and encrypting SessionContext into session token is to prevent aws receiver service to query STS again** if SessionContext is stored on STS's end and you might ask what about SecretAccessKey, isn't that STS has to store SecretAccessKey in its end? the answer is no, aws uses a share credentials (like a shared database) between each service, so receiver service doesn't need to query STS for SecretAccessKey.
 
 temporary credentials from STS are **rotated** (such as when a new session is requested or the old one expires), a new session token is generated along with the new access key ID and secret access key. The session token is unique (because Expiration will change) to each set of temporary credentials and will change every time the credentials are rotated or renewed. Each session token is valid only for its specific session and expiration period.
@@ -147,7 +155,6 @@ SessionToken:    TOKEN_B
 Expiration:      12:05:00
 Context:         ... related to DynamoDB
 ```
-
 
 When an EC2 instance starts or needs new credentials, AWS calls STS on behalf of the instance to generate fresh temporary credentials. These credentials are then stored in the instance metadata service (**IMDS** runs on `169.254.169.254`). For Lambda, these credentials are injected as environment variable 
 
@@ -408,7 +415,7 @@ both subnets' route table is the main route table above
 ```
 and assocate them with public, private subnet accordingly
 
-5. Create A NAT, which needs to be placed in public subnet and allocated a elastic ip, note that you don't need to specify IGW duringt NAT creation as NAT will use the route table of the subnet it is placed, in this case, it is public subnet and its route table already contains an entry `0.0.0.0/0 igw`
+5. Create A NAT, which needs to be placed in public subnet and allocated an elastic ip, note that you don't need to specify IGW duringt NAT creation as NAT will use the route table of the subnet it is placed, in this case, it is public subnet and its route table already contains an entry `0.0.0.0/0 igw`
 
 6. add a new entry to private subnet's route table as:
 ```bash
@@ -444,7 +451,7 @@ also note that **NAT is actually an aws full managed EC2 instance under the hood
 
 =====================================================================================================================================================================================
 
-## Gateway Endpoint Vs Inteface Endpoint
+## Gateway Endpoint Vs Interface Endpoint
 
 * **Gateway Endpoint**: only support S3 and DynamoDB; it adds routes to route tables
 ```bash
@@ -456,7 +463,7 @@ pl-xxxxxxx                 vpce-xxxxxxxx  # <--------gateway endpoint id
 # pl mean prefix list, and it cotnains com.amazonaws.apsoutheast-2.s3
 ```
 
-* **Inteface Endpoint**: doesn't modify route table, **it create an ENI attached to the subnet**, and AWS DNS will resolve public dns name to the ENI's privatge dns name, for example:
+* **Inteface Endpoint**: doesn't modify route table, **it create an ENI attached to the subnet**, and AWS DNS will resolve public dns name to the ENI's private dns name, for example:
 ```bash
 aws sqs send-message --queue-url "https://sqs.ap-southeast-2.amazonaws.com/070648356818/myqueue" --message-body "Hi from AWS" --endpoint-url https://vpce-0b2f4ec4bbdb4771a-js2svm3r.sqs.ap-southeast-2.vpce.amazonaws.com/
 
@@ -1092,7 +1099,7 @@ B	         stores + acknowledges
 C	         stores + acknowledges
 D	         stores + acknowledges
 E	         may be delayed / backup
-F	         may be delayed / backup
+F	         may be delayed / backupn
 
 Commit happens when: 4 out of 6 nodes confirm write
 ```
@@ -1605,7 +1612,7 @@ shoppingau.com.au. NS ns-789.awsdns-12.org.
 shoppingau.com.au. NS ns-101.awsdns-34.co.uk.
 
 www.shoppingau.com.au      CNAME             shoppingau.com.au
-shoppingau.com.au          A (or ALIAS)      54.66.100.20
+shoppingau.com.au          A                   54.66.100.20
 ```
 You might ask those NS records only need to be used once in Godaddy who uses those NS to update AU TLD, after that , route 53 won't use those NS records
 
@@ -1656,3 +1663,223 @@ myapp.conm         NS         ns-1536.awsdns-00.co.uk.   ns-0.awsdns-00.com    n
 myapp.conm         SOA        ns-1536.awsdns-00.co.uk.   awsdns-hostmaster.amazon.com. 
 db.myapp.com       A          172.31.32.71
 ```
+
+
+========================================================================================================================================================================================
+
+## Lambda
+
+```js
+// ===== Init phase =====
+console.log("INIT started");
+
+const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+const client = new DynamoDBClient({});
+
+// ===== Handler phase =====
+exports.handler = async (event) => {
+    console.log("HANDLER started");
+
+    return {
+        statusCode: 200
+    };
+};
+
+// init phase can be resued for subsequent invocation
+// init → Execution 1 →  Execution 2
+// but only aws control when init phase should end,  it could be 30 secs or 1 hours
+```
+
+```
+Execution Environment
+┌─────────────────────────┐
+│ Linux operating system  │
+│                         │
+│ Node.js runtime         │
+│                         │
+│ Your Lambda code        │
+└─────────────────────────┘
+```
+
+```
+Cold start phase
+├── Create execution environment (AWS allocates compute resources and creates an isolated runtime)
+├── Start runtime (for .NET, it is to load CLR)
+├── Load your code
+├── Run Init phase (top-level code)
+└── Hand-off to handler (READY state)
+```
+
+Reserved Concurrency solves throttling issue, and Provisioned Concurrency (you have to pay even the warm function is not being used) solves Cold Start issue, SnapStart is like snapshot of your "init" version of Lambda (note that Provisioned Concurrency doesn't run INT phrase, that's why SnapStart is fastern than Provisioned Concurrency), so you don't pay even when the function is not invoked.
+
+===========================================================================================================================================
+
+## SQS
+
+Unlike Kafka, SQS cannot do **Exact Once** (supported by Kafka's Transaction), SQS can do "No Duplicated Message" in the queue by using FIFO queue
+
+FIFO deduplication checks whether a message is a duplicate using (You must choose one deduplication method, not bothwhen hhh):
+
+* Option 1: Content-based deduplication
+
+SQS hashes the message body. If the same content is sent within 5 minutes, it is treated as duplicate and ignored.
+
+* Option 2: MessageDeduplicationId
+
+You explicitly provide a unique ID:
+MessageDeduplicationId = "order-123"
+If you send again within 5 minutes with same ID → SQS rejects it.
+
+Note that FIFO doesn't prevent "Visibility timeout retries Message becomes visible again and reprocessed", so it is still "at least once"
+
+```
+SQS Queue
+    │
+    ▼
+Event Source Mapping
+    │
+    ▼
+Lambda Function
+```
+
+**An Event Source Mapping** is the AWS-managed configuration that tells the Lambda service to run pollers for a specific event source and invoke your Lambda function. The pollers are implemented by the Lambda service, and the event source mapping defines how they behave.
+
+When Producer produces a message, SQS returns a response:
+```json
+{
+  "MD5OfMessageBody": "9a0364b9e99bb480dd25e1f0284c8555",    // to verify message integrity
+  "MessageId": "f4e6b7c2-1234-4cde-9abc-1234567890ab"
+}
+```
+
+When Consumer consumes a message, SQS returns a response:
+```json
+{
+  "Messages": [
+    {
+      "MessageId": "f4e6b7c2..",      // cannot use MessageId to delete messages because same message might be processed by another consumer
+      "ReceiptHandle": "AQEBxYz...",  // <----------------can be used to delete the message/change message visibility, it is like current lease holder can delete                     
+      "MD5OfBody": "9a0364b9e99bb480dd25e1f0284c8555",
+      "Body": "{\"orderId\":100}",
+      "Attributes": {
+        "SentTimestamp": "1710000000000"
+      }
+    }
+  ]
+}
+```
+ReceiptHandle is to stop message deletion when another consumer consumes the message after visibility timeout expires, as below shows:
+
+T0
+* Consumer A receives message
+* gets ReceiptHandle_A
+* starts processing
+
+T1 (visibility timeout expires)
+* message becomes visible again in SQS
+
+T2
+* Consumer B receives the same message
+* gets ReceiptHandle_B
+
+!!!!! ReceiptHandle_A is not valid any more, so ConsumerA cannot delete the message
+
+
+FIFO Queue:
+```C#
+using Amazon.SQS;
+using Amazon.SQS.Model;
+using System;
+using System.Threading.Tasks;
+
+public class Program
+{
+    public static async Task Main()
+    {
+        var client = new AmazonSQSClient();
+
+        var request = new SendMessageRequest
+        {
+            QueueUrl = "https://sqs.ap-southeast-2.amazonaws.com/123456789012/my-fifo-queue.fifo",
+            MessageBody = "{\"orderId\": 1001, \"status\": \"created\"}",
+
+            // Required for FIFO queue
+            MessageGroupId = "orders",
+
+            // Needed for dedupe in FIFO queue
+            // If you use content-based dedupe, you can omit this.
+            MessageDeduplicationId = "order-1001-at-2026-06-16T10:30:00Z"  // <-------------FIFO use it to prevent duplicated messages
+        };
+
+        var response = await client.SendMessageAsync(request);
+
+        Console.WriteLine("Message sent successfully.");
+        Console.WriteLine($"MessageId: {response.MessageId}");
+        Console.WriteLine($"SequenceNumber: {response.SequenceNumber}");
+    }
+}
+```
+A FIFO queue is split into groups. When you send a message to a FIFO queue, you must assign a `MessageGroupId`. Within one group, ordering is strict
+Suppose you send these messages:
+A → group = "order-100"
+B → group = "order-100"
+C → group = "order-200"
+SQS guarantees:
+A is processed before B, because both are in the same group.
+C may be processed independently of A/B, because it is in a different group.
+
+Why "one at a time" matters
+If two consumers are polling the same FIFO queue, SQS will only give one message from a specific group to a consumer at a time.
+It does not allow two consumers to process messages from the same group simultaneously.
+This is how it preserves order for that group.
+Example with two consumers
+Imagine:
+Consumer1 receives message A from group "order-100"
+Consumer2 is also polling, but SQS will not hand it message B from the same group yet. Why? Because B must wait until A is deleted from the queue. Once Consumer1 finishes and deletes A, then SQS can give Consumer2 message B
+
+
+## SNS
+
+Amazon SNS (Simple Notification Service) is a fully managed publish/subscribe (pub/sub) messaging service provided by AWS.
+Its main job is to receive a message from one publisher and **fan it out** to one or more subscribers. If there is only one subscriber, using SNS may add unnecessary complexity (can use SQS directly). `SNS does not store messages the way Kafka does`, so a new subscriber cannot consumer existing messages.
+
+
+## Security
+
+**AWS KMS key never leaves the service**
+An **AES** key is a secret symmetric encryption key used by the Advanced Encryption Standard algorithm to encrypt and decrypt data. Unlike public-key cryptography, the same key is used for both encryption and decryption.
+
+There are two keys involved:
+
+* KMS key (customer master key) – never leaves AWS KMS.
+* Data key (AES key) – is returned to your application (temporarily).
+
+1. Request a data key from KMS
+Your application calls `GenerateDataKey`. KMS generates a random 256-bit AES key. For example:
+* Plaintext Data Key
+* DK = 7A9F3C...
+
+KMS also encrypts that data key using your KMS key:
+* Encrypted Data Key
+* EDK = Encrypt(KMS Key, DK)
+
+KMS returns both:
+* Plaintext Data Key (DK)
+* Encrypted Data Key (EDK)
+
+2. Encrypt your data
+Your application (not KMS) encrypts the data locally using `DK`.
+
+3. Delete the plaintext data key
+`DK` is deleted immediately after encryption, `EDK` is stored together with Encrypted Data:
+```
++---------------------------+
+| Encrypted Data            |
++---------------------------+
+
++---------------------------+
+| Encrypted Data Key (EDK)  |
++---------------------------+
+```
+4. ... Ask KMS to decrypt the data key when reading data
+

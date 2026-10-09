@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+    some: else
+    # annotations:
+    #   "kubernetes.io/change-cause": "update nginx to tag 1.27.0-alpine"
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx 
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.271-alpine
+        ports:
+        - containerPort: 80
+  # strategy:
+  #   type: RollingUpdate
+  #   rollingUpdate:
+  #     maxUnavailable: 1
+  #     maxSurge: 1
+  
+# $ kubectl rollout history deployment nginx-deployment
+# deployment.apps/nginx-deployment
+# REVISION  CHANGE-CAUSE
+# 1         <none>
+# 2         update nginx to tag 1.27.0-alpine

@@ -1,0 +1,23 @@
+name: my-app
+
+include:
+  - a-notebooks-backend/compose.yaml
+  - b-notes-backend/compose.yaml
+
+services:
+  reverse-proxy:
+    image: nginx:1.27.0
+    volumes:
+      - type: bind
+        source: ./c-reverse-proxy/nginx.conf
+        target: /etc/nginx/nginx.conf
+    ports:
+      - 8080:80
+    networks:
+      - compose-net
+    depends_on:
+      - notebooks
+      - notes
+
+networks:
+  compose-net:

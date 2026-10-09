@@ -1,0 +1,61 @@
+name: key-value-app
+services:
+  backend:  # <---------------this is the service name, not container name, http://backend:3000
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    ports:
+      - 3000:3000
+    env_file:
+      - .env.db-key-value
+    environment:
+      - MONGODB_HOST=db
+      - PORT=3000
+    depends_on:  # only waits for the dependency container to be started, it does not wait for that container to be healthy and ready to accept connections.
+      - db       # this is a very common source of errors. For example, a database container might be "started," but the database process inside it
+                 # could still be initializing for several seconds. An application that tries to connect immediately upon startup might fail.
+                 # robust applications should implement their own connection retry logic.
+    networks:
+      - key-value-net
+    develop:
+      watch:
+        - action: sync  # copies/synchronizes changed files from the host into the container's filesystem (unlike bind mounts, no copy is involved)
+                        # sync does not get synchronized changes in container back to the host, the direction is host → container
+          path: ./backend/src
+          target: /app/src
+          ignore:
+            - node_modules
+
+        # - action: rebuild  # package.json  →  rebuild image
+        #   path: package.json
+
+    # image: backend:latest <------without explicitly specifying the image name, docker-compose will use the default naming convention, which is:    
+    #                              <project_name>_<service_name>:<tag>, in this case, it is "key-value-app_backend:latest"
+
+  db:
+    image: mongodb/mongodb-community-server:7.0-ubuntu2204
+    ports:
+      - 27017:27017
+    # environment:   <----------------------------------do not use environment variables for sensitive data 
+    #   - MONGODB_INITDB_ROOT_USERNAME=root
+    #   - MONGODB_INITDB_ROOT_PASSWORD=root_password
+    env_file:
+      - .env.db-root-creds
+      - .env.db-key-value
+    volumes:
+      - type: bind
+        source: ./db-config/mongo-init.js
+        target: /docker-entrypoint-initdb.d/mongo-init.js  # mongodb will execute mongo-init.js in the target folder to execute the js script
+        read_only: true
+      # - ./db-config/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+      - type: volume
+        source: mongodb-data
+        target: /data/db
+    networks:
+      - key-value-net
+
+volumes:
+  mongodb-data:
+
+networks:
+  key-value-net:
