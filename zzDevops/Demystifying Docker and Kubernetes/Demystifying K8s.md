@@ -2,8 +2,6 @@
 
 
 ```bash
-kubectl run color-api --image=slowjams/color-api:1.0.0 # --dry-run=client -o yaml
-
 kubectl get pod nginx-pod -o yaml
 
 kubectl run nginx --image=nginx:1.27.0
@@ -167,7 +165,8 @@ spec:
     - name: nginx-container
       image: nginx:1.27.0
       ports:
-        - containerPort: 80
+        - containerPort: 80  # <-------------only for metadata documentation, it doesn't make Nginx listen on port 80 so that tools such as 
+                             # dashboards, monitoring systems etc. can use this information to understand what ports the container declares
 ```
 
 **Imperative**:
@@ -503,8 +502,35 @@ kubectl get pod
 # nginx-deployment-8ff9bfd5f-j7m2g    0/1     ImagePullBackOff   0              21h
 # nginx-deployment-8ff9bfd5f-lxq7x    0/1     ImagePullBackOff   0              21h
 
+# <-----------you might ask why K8s doesn't create another new Pod to match 5 healthy Pods requirement, it is because of default maxUnavailable
+
+kubectl rollout history deployment nginx-deployment
+# REVISION  CHANGE-CAUSE
+# ...
+# 5         update nginx to tag 1.27.0-alpine <----at this moment, this ReplicaSet contains 5 healthy pods (e.g 2b6xs ...)
+# 6         update nginx to tag 1.27.1-alpine <--- because of invalid image verion, at this moment, this ReplicaSet has 4 healthy pods, 3 unhealthy pods
+
+
 kubectl rollout undo deployment nginx-deployment #<----------create a new Pod who joins the PREVIOUS working ReplicaSet, it is NOT like a new ReplicaSet  
                                                  # is created and 5 different new pods created and join the new ReplicaSet
+
+kubectl rollout history deployment nginx-deployment
+# REVISION  CHANGE-CAUSE
+# ...
+# 6         update nginx to tag 1.27.1-alpine <--- because of invalid image verion, at this moment, this ReplicaSet has 4 healthy pods, 3 unhealthy pods
+# 7         update nginx to tag 1.27.1-alpine <--- back to 5 health pods, and one of them is the a new Pod (8smsm)
+
+# <-----------note that there is no Revision 5 anymore, because of Revison 7 and Revision 5 have same template, so K8s change Revison 5 to Revision 7
+
+kubectl rollout history deployment nginx-deployment --revision=7 -o yaml
+# apiVersion: apps/v1
+# kind: ReplicaSet
+# metadata:
+#   annotations:
+#     deployment.kubernetes.io/desired-replicas: "5"
+#     deployment.kubernetes.io/max-replicas: "7"
+#     deployment.kubernetes.io/revision: "7"
+#     deployment.kubernetes.io/revision-history: 5  <-------------------------Revision 7 has revision history of Revision 5
 
 kubectl get pods                                                          
 # NAME                                READY   STATUS    RESTARTS      AGE
@@ -514,12 +540,17 @@ kubectl get pods
 # nginx-deployment-55f9d85f7c-l2nqm   1/1     Running   2 (80m ago)   2d22h
 # nginx-deployment-55f9d85f7c-qfkmr   1/1     Running   2 (80m ago)   2d22h
 
-kubectl rollout history deployment nginx-deployment
-# REVISION  CHANGE-CAUSE
-# 3         <none>
-# 4         update nginx to tag 1.27.0-alpine
-# 6         update nginx to tag 1.27.1-alpine <--------- at this moment, this ReplicaSet contains 5 pods (e.g 2b6xs ...)
-# 7         update nginx to tag 1.27.1-alpine <--------- revision 6 and revision 7 map to the same ReplicaSet which has existing 4 Pods, and one new Pod (8smsm)
+kubectl get rs
+# NAME                          DESIRED   CURRENT   READY   AGE
+# nginx-deployment-55f9d85f7c   5         5         5       3d22h
+# nginx-deployment-6d8469f8db   0         0         0       4d2h
+# nginx-deployment-8bdf8f46b    0         0         0       4d3h
+# nginx-deployment-8ff9bfd5f    0         0         0       46h
+
+# <----K8s doesn't immediately delete ReplicaSets with zero Pods because it keeps old ReplicaSets to support Deployment rollbacks
+#      K8s can scale up the previous ReplicaSet and restore its Pod template, rather than having to reconstruct the old version from scratch.
+#      e.g. you can do:
+kubectl rollout undo deployment nginx-deployment --to-revision=5
 ```
 ```yml
 # default strategy
@@ -544,4 +575,102 @@ With `maxUnavailable: 0` and `maxSurge: 1`, Kubernetes repeats this process unti
 | Remove one old Pod     | 3        | 2        | 5                    |
 | Continue...            | ...      | ...      | ...                  |
 | Completed              | 0        | 5        | 5                    |
+```
+
+=======================================================================================================
+
+
+# Services
+
+* `ClusterIP` : Service gets its ClusterIP. A Service selects backend Pods using labels, and K8s networking routes requests to eligible Pods, regardless of which node they run on
+ClusterIP is the default and most secure option. It is intended for internal communication between microservices (e.g., a backend API talking to a database) where external access is not required.
+
+* `NodePort`: the Service does not get assigned a Node IP address. Instead, Kubernetes exposes the Service on a static specific port on every node's IP address
+NodePort is primarily for development, testing where you need quick external access ot an app without setting up a complex Load Balancer or Ingress controller
+
+`192.168.1.10:30080` means:
+
+- 192.168.1.10 = the Node's IP address.
+- 30080 = the `NodePort`, which is the port Kubernetes exposes on that Node to let external traffic reach the Service
+
+* `ExternalName`: create a CNAME record in the cluster's internal DNS. When a Pod looks up local hostname e.g. `my-db`, the cluster DNS returns outside world e.g. `db.legacy-system.com`, and if this external address changes to e.g. `db.system.com`, you only have to update one K8s's object
+
+
+```yml
+# color-api-depl.yaml
+... # deploy 5 pods
+
+# traffic-generator.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: traffic-generator
+  labels:
+    app: traffic-generator
+spec:
+  containers:
+    - name: traffic-generator
+      image: slowjams/traffic-gen:1.0.0  # a shell program that loop curl of given ip address which is arg
+      # args:
+      #   - '10.244.0.11/api'   # <-----------this is a private IP address of a color-api-depl pod in the cluster, it can break when the pod is restarted  
+      #                                        and gets a new IP address, so it is better to use the service name instead of the pod IP address
+      #   - '0.5'
+      args:
+        - '10.96.89.195/api'   # <-----------this is a IP address of ClusterIP service
+        - '0.5'
+```
+
+```yml
+# color-api-clusterip.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: color-api-clusterip
+  labels:
+    app: color-api
+spec:
+  type: ClusterIP   #<-----------not really need this one because ClusterIP is the default type for a service, but it is good to be explicit
+  selector:
+    app: color-api  # <-----------this is a label selector that matches the labels of pods created by the color-api-deployment
+                    # service doesn't care how Pods are created, even though you manually create a Pod that has `app: color-api` label, service will include it
+                    # says you manually create another pod with same label, then the service wil show 6 Endpoints (5 from deployment + 1 manually created)
+  ports:
+  - port: 80         # <-------------this is the port that the service will expose to other pods in the cluster
+    targetPort: 80   #t <------------this is the port on the target Pod that receives the traffic
+```
+```bash
+kubectl get svc
+# NAME                  TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)   AGE
+# color-api-clusterip   ClusterIP   10.96.89.195   <none>        80/TCP    22m
+
+kubectl describe svc color-api-clusterip
+# Name:                     color-api-clusterip
+# Selector:                 app=color-api
+# Type:                     ClusterIP
+# IP:                       10.96.89.195
+# Port:                     <unset>  80/TCP
+# TargetPort:               80/TCP
+# Endpoints:                10.244.0.10:80,10.244.0.8:80,10.244.0.9:80 + 2 more...  # <----------these are 5 private ip for 5 pods in color-api-depl deployment
+                                                                                    # and if you delete and apply the deployment, endpoints automatically 
+                                                                                    # updated to map the newly created Pods' private IPs
+```
+```bash
+kubectl get pods
+# NAME                                    READY   STATUS    RESTARTS   AGE
+# color-api-deployment-5ddf49c68c-7lzlj   1/1     Running   0          87m
+# color-api-deployment-5ddf49c68c-cltdx   1/1     Running   0          45m
+# color-api-deployment-5ddf49c68c-hkcd6   1/1     Running   0          87m
+# color-api-deployment-5ddf49c68c-jslz4   1/1     Running   0          87m
+# color-api-deployment-5ddf49c68c-zrbps   1/1     Running   0          87m
+# traffic-generator                       1/1     Running   0          110s
+
+kubectl logs -f traffic-generator    
+# Sending requests to 10.96.89.195/api every 0.5 seconds.
+# [2026-10-13 13:42:59] Color: blue, Hostname: color-api-deployment-5ddf49c68c-cltdx  # <-------------now you see Service also acts as Load Balancer
+# [2026-10-13 13:42:59] Color: blue, Hostname: color-api-deployment-5ddf49c68c-zrbps
+# [2026-10-13 13:43:00] Color: blue, Hostname: color-api-deployment-5ddf49c68c-zrbps
+# [2026-10-13 13:43:00] Color: blue, Hostname: color-api-deployment-5ddf49c68c-hkcd6
+# [2026-10-13 13:43:01] Color: blue, Hostname: color-api-deployment-5ddf49c68c-7lzlj
+# [2026-10-13 13:43:01] Color: blue, Hostname: color-api-deployment-5ddf49c68c-zrbps
+# [2026-10-13 13:43:02] Color: blue, Hostname: color-api-deployment-5ddf49c68c-7lzlj 
 ```

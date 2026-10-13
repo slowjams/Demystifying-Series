@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: traffic-generator
+  labels:
+    app: traffic-generator
+spec:
+  containers:
+    - name: traffic-generator
+      image: slowjams/traffic-gen:1.0.0
+      # args:
+      #   - '10.244.0.11/api'   # <-----------this is a private IP address of a color-api pod in the cluster, it can break when the pod is restarted and 
+      #                            gets a new IP address, so it is better to use the service name instead of the pod IP address
+      #   - '0.5'
+      
+      # args:
+      #   - '10.96.89.195/api'   # <-----------this is a IP address of ClusterIP service, can also be DNS name of the service like below
+      #   - '0.5'
+      args:
+        - 'color-api-clusterip/api'   # <-----------this is a IP address of ClusterIP service
+        - '0.5'
