@@ -9,5 +9,5 @@ spec:
   selector:
     app: color-api  # <-----------this is a label selector that matches the labels of pods created by the color-api-deployment
   ports:
-  - port: 80         # <-------------this is the port that the service will expose to other pods in the cluster
-    targetPort: 80   #t <------------this is the port on the target Pod that receives the traffic
+  - port: 80         # <-------------the port that the Service listens on
+    targetPort: 80   #t <------------forwards traffic to eligible Pods' port 

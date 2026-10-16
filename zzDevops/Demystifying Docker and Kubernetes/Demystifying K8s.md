@@ -596,6 +596,10 @@ NodePort is primarily for development, testing where you need quick external acc
 * `ExternalName`: create a CNAME record in the cluster's internal DNS. When a Pod looks up local hostname e.g. `my-db`, the cluster DNS returns outside world e.g. `db.legacy-system.com`, and if this external address changes to e.g. `db.system.com`, you only have to update one K8s's object
 
 
+## ClusterIP
+
+=====================
+
 ```yml
 # color-api-depl.yaml
 ... # deploy 5 pods
@@ -615,8 +619,11 @@ spec:
       #   - '10.244.0.11/api'   # <-----------this is a private IP address of a color-api-depl pod in the cluster, it can break when the pod is restarted  
       #                                        and gets a new IP address, so it is better to use the service name instead of the pod IP address
       #   - '0.5'
+      # args:
+      #   - '10.96.89.195/api'   # <-----------this is a IP address of ClusterIP service, it is better to use  `- 'color-api-clusterip/api'` here
+      #   - '0.5'                # because this IP can still changed when the service is deleted and recreated   
       args:
-        - '10.96.89.195/api'   # <-----------this is a IP address of ClusterIP service
+        - 'color-api-clusterip/api'   # <-----------this is a IP address of ClusterIP service, it is better to use the service DNS name than the Cluster IP
         - '0.5'
 ```
 
@@ -635,8 +642,8 @@ spec:
                     # service doesn't care how Pods are created, even though you manually create a Pod that has `app: color-api` label, service will include it
                     # says you manually create another pod with same label, then the service wil show 6 Endpoints (5 from deployment + 1 manually created)
   ports:
-  - port: 80         # <-------------this is the port that the service will expose to other pods in the cluster
-    targetPort: 80   #t <------------this is the port on the target Pod that receives the traffic
+  - port: 80         # <-------------the port that the Service listens on
+    targetPort: 80   #t <------------forwards traffic to eligible Pods' port 
 ```
 ```bash
 kubectl get svc
@@ -674,3 +681,58 @@ kubectl logs -f traffic-generator
 # [2026-10-13 13:43:01] Color: blue, Hostname: color-api-deployment-5ddf49c68c-zrbps
 # [2026-10-13 13:43:02] Color: blue, Hostname: color-api-deployment-5ddf49c68c-7lzlj 
 ```
+note that **`ClusterIP` uses **label selector** that matches the labels of pods**, it doesn't care how Pods are created, even though you manually create a Pod that has same e.g. `app: color-api` label, service will track/include it.  Says you manually create another pod with same label, then the service wil show 6 Endpoints (5 from deployment + 1 manually created). Also note that ClusterIP Service does not choose a node. It routes traffic to a matching Pod, regardless of which node that Pod runs on
+
+## NodePort
+
+```yml
+apiVersion: v1
+kind: Service
+metadata:
+  name: color-api-nodeport
+  labels:
+    app: color-api
+spec:
+  type: NodePort
+  # externalTrafficPolicy: Local  # Only local Pods  
+  selector:
+    app: color-api 
+  ports:
+  - port: 80         
+    targetPort: 80
+    nodePort: 30007
+```
+we have to test in real Linux (https://killercoda.com/playgrounds/scenario/kubernetes) not WSL (WSL uses a mapping which is like a workround):
+
+```bash
+kubectl get pod -o wide
+
+# NAME                                    READY   STATUS    RESTARTS   AGE     IP              NODE           NOMINATED NODE   READINESS GATES
+# color-api-deployment-67bc4d4976-6plnr   1/1     Running   0          5m31s   192.168.1.228   node01         <none>           <none>
+# color-api-deployment-67bc4d4976-hp2st   1/1     Running   0          5m31s   192.168.0.151   controlplane   <none>           <none>
+# color-api-deployment-67bc4d4976-lwg6n   1/1     Running   0          5m31s   192.168.1.90    node01         <none>           <none>
+# color-api-deployment-67bc4d4976-nxch4   1/1     Running   0          5m31s   192.168.0.6     controlplane   <none>           <none>
+# color-api-deployment-67bc4d4976-wl8p4   1/1     Running   0          5m31s   192.168.1.35    node01         <none>           <none>
+
+kubectl get node -o wide
+
+# NAME           STATUS   ROLES           AGE   VERSION   INTERNAL-IP   EXTERNAL-IP   OS-IMAGE             KERNEL-VERSION              CONTAINER-RUNTIME
+# controlplane   Ready    control-plane   10d   v1.37.1   172.30.1.2    <none>        Ubuntu 24.04.5 LTS   6.8.0-146-generic (amd64)   containerd://2.2.1
+# node01         Ready    <none>          10d   v1.37.1   172.30.2.2    <none>        Ubuntu 24.04.5 LTS   6.8.0-146-generic (amd64)   containerd://2.2.1
+
+curl 172.30.2.2:30007
+curl 172.30.1.2:30007
+```
+note that K8s configures networking rules so that a NodePort on any node can forward traffic to a backend Pod running on another node, to enforce reuested Node does not forward the request to Pods on different Node, use `externalTrafficPolicy`
+
+
+
+
+
+
+
+
+
+
+
+

@@ -17,5 +17,6 @@ spec:
       #   - '10.96.89.195/api'   # <-----------this is a IP address of ClusterIP service, can also be DNS name of the service like below
       #   - '0.5'
       args:
-        - 'color-api-clusterip/api'   # <-----------this is a IP address of ClusterIP service
-        - '0.5'
+        - 'color-api-clusterip/api'   # <-----------this is a IP address of ClusterIP service, it is better to use the service DNS name than the ClusterIP
+        - '0.5'                       # address becuse the ClusterIP can change when the service is deleted and recreated, but the DNS name will always 
+                                      # resolve  to the correct IP address of the service
