@@ -1,6 +1,7 @@
 #!/bin/sh
 
 # ./traffic-gen.sh "localhost:8080/api" 0.5
+# ./traffic-gen.sh "color-api-clusterip/api" 0.5
 
 if [ "$#" -lt 2 ]; then
     echo "Usage: $0 <target> <interval-in-seconds>"

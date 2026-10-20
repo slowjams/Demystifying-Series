@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: traffic-generator
+  labels:
+    app: traffic-generator
+spec:
+  containers:
+    - name: traffic-generator
+      image: slowjams/traffic-gen:1.0.0
+      args:
+        # <serviceName>.<namespace>.svc.cluster.local
+        - 'color-api-svc.dev.svc.cluster.local/api'  
+        - '1'                      

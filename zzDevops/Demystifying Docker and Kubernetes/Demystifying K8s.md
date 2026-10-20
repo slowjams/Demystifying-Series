@@ -2,6 +2,9 @@
 
 
 ```bash
+# slowjams/color-api:1.1.0
+
+
 kubectl get pod nginx-pod -o yaml
 
 kubectl run nginx --image=nginx:1.27.0
@@ -12,14 +15,6 @@ apk --update add curl
 kubectl get pods
 kubectl logs nginx --container=nginx
 kubectl expose pod nginx --type=NodePort --port=80
-```
-
-```bash
-kubectl get service
-
-# NAME         TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)        AGE
-# kubernetes   ClusterIP   10.96.0.1       <none>        443/TCP        20d
-# nginx        NodePort    10.107.19.247   <none>        80:31668/TCP   10m
 ```
 
 
@@ -283,21 +278,20 @@ says you do:
 2. change the yaml's image to a different version `nginx:1.27.0-alpine`
 3. `kubectl apply -f nginx-rs.yaml` again
 
-then **the 3 Pods still contain old image versions**, you have to delete all 3 exsiting pods so that new pods will have the new image version, that is one of reasons why we need a higher abstraction **Deployment** to manage the shortcomings of ReplicaSet
+A ReplicaSet ensures that the correct number of Pods exist; **it doesn't update existing Pods when its Pod template changes** so you will see **the 3 Pods still contain old image versions**, you have to delete all 3 exsiting pods so that new pods will have the new image version, that is one of reasons why we need a higher abstraction **Deployment** to manage the shortcomings of ReplicaSet
 
-says you do:
+say you do:
 1. `kubectl apply -f nginx-pod.yaml` to manually create a Pod first
 2. `kubectl apply -f nginx-rs.yaml`
 the replicaSet will only create two Pods, the exsiting pod will count as part of the replicaSet
 
-says you do:
+say you do:
 1. `kubectl apply -f nginx-rs.yaml`
 2. `kubectl apply -f nginx-pod.yaml` to try manually creating a Pod first
 the new manually created pod will count as part of the replicaSet, and replicaSet will delete one pod, it could be the manual Pod, or it could be one of the existing Pods from the replicaSet, depending on Kubernetes' Pod-selection logic.
 
-So now you see A ReplicaSet can maintain a stable number of Pods for a single version of an application, but it offers **no automated strategy for transitioning from one version to another**
+So now you see a ReplicaSet can maintain a stable number of Pods for a single version of an application, but it offers **no automated strategy for transitioning from one version to another**
 
-This is the correct answer. This is a critical validation rule. If the template's labels didn't match the selector, the ReplicaSet would create Pods that it couldn't see, leading to an infinite loop of Pod creation. The Kubernetes API server enforces this match.
 
 ================================================================================
 
@@ -685,6 +679,8 @@ note that **`ClusterIP` uses **label selector** that matches the labels of pods*
 
 ## NodePort
 
+NodePort is suitable for local development/testing
+
 ```yml
 apiVersion: v1
 kind: Service
@@ -726,13 +722,280 @@ curl 172.30.1.2:30007
 note that K8s configures networking rules so that a NodePort on any node can forward traffic to a backend Pod running on another node, to enforce reuested Node does not forward the request to Pods on different Node, use `externalTrafficPolicy`
 
 
+## ExternalName
+
+Suppose your application runs inside K8s, but your database is hosted outside the cluster.
+
+```yml
+apiVersion: v1
+kind: Service
+metadata:
+  name: database
+spec:
+  type: ExternalName
+  externalName: prod-db.example.com   # <--------should NOT include the http:// or https:// prefix, just the domain name, because it asks for DNS CNAME record
+```
+
+K8s DNS returns a CNAME record pointing to the external hostname. The application then connects directly to the resolved destination, so that you app can use
+`database:5432` instead of `prod-db.example.com:5432`
 
 
+==================================================================================
 
 
+## Label and Selector
+
+Label:
+
+```yml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: color-backend
+  labels:
+    app: color-api
+    environment: local
+    tier: backend
+spec:
+  containers:
+  - name: color-backend
+    image: slowjams/color-api:1.1.0
+    ports:
+      - containerPort: 80
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: color-frontend
+  labels:
+    app: color-api
+    environment: local
+    tier: frontend
+spec:
+  containers:
+  - name: color-nginx
+    image: nginx:1.27.0
+    ports:
+      - containerPort: 80
+```
+```bash
+kubectl apply -f .
+
+# uppcasecase L for displaying label
+kubectl get pods -L app,tier, nonExist       
+# NAME             READY   STATUS    RESTARTS   AGE   APP         TIER       NONEXIST
+# color-backend    1/1     Running   0          20m   color-api   backend
+# color-frontend   1/1     Running   0          20m   color-api   frontend
+
+# lowercase L for filtering label
+kubectl get pods -l tier=frontend  
+# NAME             READY   STATUS    RESTARTS   AGE
+# color-frontend   1/1     Running   0          20m
+
+kubectl get pod -l tier=frontend -l app=color-api   # <---------------`OR` for mulitple `-l`
+# NAME             READY   STATUS    RESTARTS   AGE
+# color-backend    1/1     Running   0          24m
+# color-frontend   1/1     Running   0          24m
+
+kubectl get pod -l tier=frontend,app=color-api      # <---------------`AND` for single `-l` with `,` for multiple "and" condition
+# NAME             READY   STATUS    RESTARTS   AGE
+# color-frontend   1/1     Running   0          25m
+
+kubectl get pod -l 'tier in (frontend)'
+kubectl get pod -l 'tier notin (frontend)'
+kubectl get pod -l "tier=backend, status!=unstable"
+```
+
+Selector:
+```yml
+...
+selector:          # <--------------selector logic is AND
+  app: web-store
+  env: production
+```
+This selector match pods with labels: `app: web-store`, `env: production` and `tier: frontend`, first two needs to be matched exactly because selector logic is `AND`, pods can have extra other labels such as tier: frontend ... 
 
 
+===============================================================================================
 
 
+## Namespace
+
+Namespaces create virtual clusters. They solve naming collisions (you can reuse names like database or frontend across environments) and act as a boundary e.g for `dev`, `stg`, `prd` etc for governance (limiting CPU/RAM usage or restricting who can delete resources), which means Namespaces enable logical isolation of resources within the same physical cluster. Initial namespaces: `default`, `kube-system`, `kube-public`, and `kube-node-lease`
+
+```yml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dev   # <-----------------------
+```
+
+```bash
+kubectl get ns
+# NAME              STATUS   AGE
+# default           Active   38d
+# dev               Active   8s
+# kube-node-lease   Active   38d
+# kube-public       Active   38d
+# kube-system       Active   38d
+```
+```yml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: color-api
+  namespace: dev
+...
+```
+```bash
+kubectl get pod -n dev
+kubectl get pod --all-namespaces  ## kubectl get pod -A    <------------ `-A` is shorthand for --all-namespaces
+
+kubectl config set-context --current --namespace=dev
+```
+note that if you delete a namespace, all the resources such as pods will be deleted too, so **be extremely careful about deleting namespaces!!! be extremely careful about deleting namespaces!!! be extremely careful about deleting namespaces!!!**, you should use security role based access control to limit who can delete namespaces, thats also why `kubectl delete -f .` work becuase if it delete ns first, it will delete the pod too, while reververly `kubectl apply -f .`
+can sometimes throw an error because k8s tries to create a Pod under the ns which has not been created yet
 
 
+Cross-Namespace Communication: `<serviceName>.<namespace>.svc.cluster.local`, ".svc.cluster.local" is to distinguish real subdomain or K8s's subdomain by K8s DNS resolver 
+```yml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: traffic-generator
+  labels:
+    app: traffic-generator
+spec:
+  containers:
+    - name: traffic-generator
+      image: slowjams/traffic-gen:1.0.0
+      args:
+        # <serviceName>.<namespace>.svc.cluster.local
+        - 'color-api-svc.dev.svc.cluster.local/api'  
+        - '1'                      
+```
+```yml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: color-api
+  namespace: dev  # <-----------------------
+  labels:
+    app: color-api
+spec:
+  containers:
+  - name: color-api
+    image: slowjams/color-api:1.1.0
+    ports:
+      - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: color-api-svc
+  namespace: dev   # <-----------------------
+spec:
+  type: ClusterIP
+  selector:
+    app: color-api
+  ports:
+    - port: 80
+      targetPort: 80
+```
+
+===============================================================================================
+
+
+## Resource Quotas
+
+Resource Quotas: policy applied at the **Namespace** level that defines hard limits on the number of resources (such as CPU, memory, and object counts) that can be consumed by all objects within that **namespace**.
+
+```yml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dev
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: dev-quota
+  namespace: dev      #<--------------------ResourceQuota is applied to this namespace
+spec:
+  hard:               # <-------------------hard is the set of desired hard limits for each named resource
+    requests.cpu: "1"   
+    requests.memory: "1Gi"
+    limits.cpu: "2"
+    limits.memory: "2Gi"
+```
+Pdd:
+```yml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: color-api
+  namespace: dev    
+  labels:
+    app: color-api
+spec:
+  containers:
+  - name: color-api
+    image: slowjams/color-api:1.1.0  
+    ports:
+      - containerPort: 80
+    resources:
+      requests:
+        cpu: "200m"      # 0.2 CPU cores
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+```
+Physically, the application in a Pod may use only 32 MiB of RAM. K8s **does NOT** automatically fill the remaining 256 MiB with unused memory or reserve a dedicated 200 MiB block of physical RAM for the container. Even if Pod A uses just 32 MiB, K8s normally considers 256 MiB accounted for **when evaluating** whether another Pod fits.
+
+let's see a scenerio that go beyond the limits:
+```bash
+# say there is a deployment of 4 pods, each pod consumes cpu: "200m" memory: "256Mi", so if there is a 5th pod, then k8s cannot schedule it
+kubectl describe resourcequota dev-quota -n dev
+
+# Name:            dev-quota
+# Namespace:       dev
+# Resource         Used  Hard
+# --------         ----  ----
+# limits.cpu       2     2
+# limits.memory    2Gi   2Gi
+# requests.cpu     800m  1
+# requests.memory  1Gi   1Gi
+
+# now you change the image version and rollout an update, and ther is only 3 pods, not 4, but we didn't change the replica number, should expect 4 pods, why 3?
+kubectl get pods -n dev
+# NAME                         READY   STATUS    RESTARTS   AGE
+# color-api-57867d8bb9-wl6kx   1/1     Running   0          8s
+# color-api-c5447cc5b-pp88j    1/1     Running   0          30m
+# color-api-c5447cc5b-pptpk    1/1     Running   0          30m
+
+# because of RollingUpdate strategy, k8s needs to create a new pod first then bring down an old pod, but it couldn't crete a new pod becuase limit has hit
+kubectl get rs -n dev
+# NAME                   DESIRED   CURRENT   READY   AGE
+# color-api-57867d8bb9   3         1         1       4m33s
+# color-api-c5447cc5b    2         2         2       34m
+
+kubectl describe rs color-api-57867d8bb9 -n dev
+# ...
+# Events:
+#   Type     Reason            Age               From                   Message
+#   ----     ------            ----              ----                   -------
+  Warning  FailedCreate      6m13s               replicaset-controller  Error creating: pods "color-api-57867d8bb9-h2w8q" is forbidden: exceeded quota: ...
+# ...
+
+# you can add more capacity to the dev-quota and apply the change and then do:
+kubectl rollout restart deploy color-api-depl -n dev   # to skip the exponential backoff retry which takes long time 
+
+# note that kubectl rollout restart triggers a new Deployment rollout. It does not restart the existing ReplicaSet color-api-57867d8bb9, that is why you 
+# will see a new replicaset being created
+kubectl get rs -n dev
+# NAME                   DESIRED   CURRENT   READY   AGE
+# color-api-57867d8bb9   0         0         0       18m
+# color-api-6949bd6bf8   4         4         4       4s
+# color-api-c5447cc5b    0         0         0       48m
+```
