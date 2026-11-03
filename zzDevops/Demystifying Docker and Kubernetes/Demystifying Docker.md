@@ -700,6 +700,65 @@ CMD ["-g", "daemon off;"]
 
 # Bind Mount and Named volumes
 
+An Image's layer are read-only and shared by containers, docker wil combine the writable layer and read-only image layers and presentit to each container. It is NOT like Docker copy shared image layer's content to each container's filesystem and writable layer is not needed, says there are 100 containers and image is 1Gb, then 100Gb data needs to be copied into, doing this will cause significant performance hit.
+
+```
+Host Linux filesystem
+│
+└── /var/lib/docker/
+    │
+    └── overlay2/
+        │
+        ├── IMAGE LAYERS (shared, read-only)
+        │   │
+        │   ├── layer-A/
+        │   │   └── diff/
+        │   │       ├── bin/
+        │   │       ├── etc/
+        │   │       └── usr/
+        │   │
+        │   ├── layer-B/
+        │   │   └── diff/
+        │   │       └── usr/
+        │   │           ├── sbin/nginx
+        │   │           └── share/nginx/html/
+        │   │               ├── index.html
+        │   │               └── 50x.html
+        │   │
+        │   └── layer-C/
+        │       └── diff/
+        │           └── additional files...
+        │
+        ├── CONTAINER 1 (nginx1)
+        │   │
+        │   ├── diff/             <-- Upper directory, writable layer
+        │   │   └── usr/share/nginx/html/
+        │   │       └── index.html (modified by nginx1)
+        │   │
+        │   ├── work/             <-- Work directory
+        │   │
+        │   └── merged/           <-- nginx1 filesystem, combining the writable layer and read-only image layers
+        │       ├── bin/
+        │       ├── etc/
+        │       └── usr/share/nginx/html/
+        │           ├── index.html
+        │           └── 50x.html
+        │
+        └── CONTAINER 2 (nginx2)
+            │
+            ├── diff/             <-- Upper directory, writable layer
+            │   (empty)
+            │
+            ├── work/             <-- Work directory
+            │
+            └── merged/           <-- nginx2 filesystem
+                ├── bin/
+                ├── etc/
+                └── usr/share/nginx/html/
+                    ├── index.html
+                    └── 50x.html
+```
+
 ```
 Docker mounts
 ├── Volume
@@ -725,7 +784,7 @@ docker volume create website-data
 docker run -d -p 3000:80 --name website-main -v website-data:/usr/share/nginx/html nginx:1.27.0   #  website-data is NOT host directory like bind mount
 docker run -d -p 3001:80 --name website-readonly -v website-data:/usr/share/nginx/html:ro nginx:1.27.0  # -v SOURCE:DESTINATION:OPTIONS, ro mean read-only
 
-# New empty named volume → Docker may initialize it from the image's existing directory. 
+# New empty named volume → Docker copied /usr/share/nginx/html into the empty volume (only copy once), so there is a little bit performace cost to use bind volume
 
 #  Nginx image
 #  /usr/share/nginx/html/
@@ -737,8 +796,6 @@ docker run -d -p 3001:80 --name website-readonly -v website-data:/usr/share/ngin
 #   website-data
 #   ├── index.html
 #   └── 50x.html
-
-# Existing/non-empty volume → its contents are used as-is.
 
 docker volume inspect website-data
 #[

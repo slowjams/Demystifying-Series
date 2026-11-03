@@ -141,6 +141,50 @@ Kubernetes API
 ```
 
 
+## Pod and Container
+
+A pod can contain multiple containers, the norm is, a pod **only contains ONE main/app container**, other containers in the pod are only auxiliary containers that provides supporting functionality, containers insiding same Pod can use localhost to communicate with each other. 
+
+```
+                 Kubernetes Node
+┌──────────────────────────────────────────────────────┐
+│                                                      │
+│   ┌──────────────────────────────────────────────┐   │
+│   │                  Pod                         │   │
+│   │                                              │   │
+│   │   Shared Network Namespace                   │   │
+│   │   Shared IP: 10.244.1.5                      │   │
+│   │                                              │   │
+│   │   ┌──────────────────┐                       │   │
+│   │   │   Container 1    │                       │   │
+│   │   │                  │                       │   │
+│   │   │   Application A  │                       │   │
+│   │   │                  │                       │   │
+│   │   │   localhost      │                       │   │
+│   │   │   :8080          │                       │   │
+│   │   └────────┬─────────┘                       │   │
+│   │            │                                 │   │
+│   │            │ HTTP Request                    │   │
+│   │            │ http://localhost:8080           │   │
+│   │            ▼                                 │   │
+│   │   ┌──────────────────┐                       │   │
+│   │   │   Container 2    │                       │   │
+│   │   │                  │                       │   │
+│   │   │   Application B  │                       │   │
+│   │   │   Listening on   │                       │   │
+│   │   │   0.0.0.0:8080   │                       │   │
+│   │   └──────────────────┘                       │   │
+│   │                                              │   │
+│   │   Both containers share:                     │   │
+│   │   - Same Pod IP                              │   │
+│   │   - Same network namespace                   │   │
+│   │   - Same localhost (127.0.0.1)               │   │
+│   │                                              │   │
+│   └──────────────────────────────────────────────┘   │
+│                                                      │
+└──────────────────────────────────────────────────────┘
+```
+
 
 ## Declarative vs Imperative Commands
 
@@ -577,7 +621,8 @@ With `maxUnavailable: 0` and `maxSurge: 1`, Kubernetes repeats this process unti
 # Services
 
 * `ClusterIP` : Service gets its ClusterIP. A Service selects backend Pods using labels, and K8s networking routes requests to eligible Pods, regardless of which node they run on
-ClusterIP is the default and most secure option. It is intended for internal communication between microservices (e.g., a backend API talking to a database) where external access is not required.
+
+ClusterIP is the **default** and **most secure option**. It is intended for internal communication between microservices (e.g., a backend API talking to a database) where external access is not required.
 
 * `NodePort`: the Service does not get assigned a Node IP address. Instead, Kubernetes exposes the Service on a static specific port on every node's IP address
 NodePort is primarily for development, testing where you need quick external access ot an app without setting up a complex Load Balancer or Ingress controller
@@ -592,7 +637,7 @@ NodePort is primarily for development, testing where you need quick external acc
 
 ## ClusterIP
 
-=====================
+A ClusterIP is a virtual, private IP that only exists in the cluster's internal network, so a machine outside the cluster has no route to it. Typing a ClusterIP into your browser from your laptop will fail. So only the running pods can use ClusterIP to communicate with other pods, below is an example that a traffic-generator pod sends request to ClusterIP service that manages 5 color-api pods, ClusterIP act like a bridge with load balancing feature to connect both parties:
 
 ```yml
 # color-api-depl.yaml
@@ -610,14 +655,14 @@ spec:
     - name: traffic-generator
       image: slowjams/traffic-gen:1.0.0  # a shell program that loop curl of given ip address which is arg
       # args:
-      #   - '10.244.0.11/api'   # <-----------this is a private IP address of a color-api-depl pod in the cluster, it can break when the pod is restarted  
-      #                                        and gets a new IP address, so it is better to use the service name instead of the pod IP address
+      #   - '10.244.0.11/api'   # <-----------bad; this is a private IP address of a color-api-depl pod, it can break when the pod is restarted  
+      #                                       and gets a new IP address, so it is better to use the service name instead of the pod IP address
       #   - '0.5'
       # args:
-      #   - '10.96.89.195/api'   # <-----------this is a IP address of ClusterIP service, it is better to use  `- 'color-api-clusterip/api'` here
+      #   - '10.96.89.195/api'   # <----------- better; this is a IP address of ClusterIP service, it is better to use  `- 'color-api-clusterip/api'` here
       #   - '0.5'                # because this IP can still changed when the service is deleted and recreated   
       args:
-        - 'color-api-clusterip/api'   # <-----------this is a IP address of ClusterIP service, it is better to use the service DNS name than the Cluster IP
+        - 'color-api-clusterip/api'   # <-----------best; use static service DNS name than the Cluster IP
         - '0.5'
 ```
 
@@ -626,7 +671,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: color-api-clusterip
+  name: color-api-clusterip  # <------------------------
   labels:
     app: color-api
 spec:
@@ -677,9 +722,10 @@ kubectl logs -f traffic-generator
 ```
 note that **`ClusterIP` uses **label selector** that matches the labels of pods**, it doesn't care how Pods are created, even though you manually create a Pod that has same e.g. `app: color-api` label, service will track/include it.  Says you manually create another pod with same label, then the service wil show 6 Endpoints (5 from deployment + 1 manually created). Also note that ClusterIP Service does not choose a node. It routes traffic to a matching Pod, regardless of which node that Pod runs on
 
+
 ## NodePort
 
-NodePort is suitable for local development/testing
+NodePort builds on ClusterIP and also opens a fixed port (30000-32767 by default) on every node, and it is suitable for local development/testing because it allows communication from outside the cluster
 
 ```yml
 apiVersion: v1
@@ -856,8 +902,8 @@ kubectl config set-context --current --namespace=dev
 note that if you delete a namespace, all the resources such as pods will be deleted too, so **be extremely careful about deleting namespaces!!! be extremely careful about deleting namespaces!!! be extremely careful about deleting namespaces!!!**, you should use security role based access control to limit who can delete namespaces, thats also why `kubectl delete -f .` work becuase if it delete ns first, it will delete the pod too, while reververly `kubectl apply -f .`
 can sometimes throw an error because k8s tries to create a Pod under the ns which has not been created yet
 
+Cross-Namespace Communication: `<serviceName>.<namespace>.svc.cluster.local`, ".svc.cluster.local" is to distinguish real subdomain or K8s's subdomain by K8s DNS resolver:
 
-Cross-Namespace Communication: `<serviceName>.<namespace>.svc.cluster.local`, ".svc.cluster.local" is to distinguish real subdomain or K8s's subdomain by K8s DNS resolver 
 ```yml
 apiVersion: v1
 kind: Pod
@@ -910,6 +956,12 @@ spec:
 
 Resource Quotas: policy applied at the **Namespace** level that defines hard limits on the number of resources (such as CPU, memory, and object counts) that can be consumed by all objects within that **namespace**.
 
+`requests`: (before runtime) the amount of CPU and memory K8s reserves for the container. It's what the scheduler uses to decide which node a pod can run on.
+
+`limits`: (in runtime) hard ceiling on what a container is allowed to use, below is what happen after limits is reached
+  - cpu: CPU is compressible, so the container is throttled
+  - memory: Memory is incompressible, `OOMKilled` exception throws
+
 ```yml
 apiVersion: v1
 kind: Namespace
@@ -928,7 +980,7 @@ spec:
     limits.cpu: "2"
     limits.memory: "2Gi"
 ```
-Pdd:
+Pod:
 ```yml
 apiVersion: v1
 kind: Pod
@@ -944,7 +996,7 @@ spec:
     ports:
       - containerPort: 80
     resources:
-      requests:
+      requests:          # <----------------the scheduler uses to decide which node a pod can run on
         cpu: "200m"      # 0.2 CPU cores
         memory: "256Mi"
       limits:
@@ -998,4 +1050,295 @@ kubectl get rs -n dev
 # color-api-57867d8bb9   0         0         0       18m
 # color-api-6949bd6bf8   4         4         4       4s
 # color-api-c5447cc5b    0         0         0       48m
+```
+
+=====================================================================================
+
+## Probe
+
+```yml
+apiVersion: apps/v1
+kind: Deployment
+# ...
+spec:
+  replicas: 6
+  selector:
+    matchLabels:
+      app: color-api
+  template:
+    metadata:
+      labels:
+        app: color-api
+    spec:
+      containers:
+        - name: color-api
+          image: slowjams/color-api:1.2.1 
+          ports:
+            - containerPort: 80
+          startupProbe:
+            httpGet:
+              path: /up
+              port: 80
+            failureThreshold: 2
+            periodSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            failureThreshold: 3
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 80
+            failureThreshold: 2
+            periodSeconds: 5
+          env:
+            - name: DELAY_STARTUP
+              value: "false"
+            - name: FAIL_LIVENESS
+              value: "false"
+            - name: FAIL_READINESS
+              value: "true"
+```
+```js
+// ...
+app.get('/ready', (req, res) => {
+  if (fail_readiness) {
+    return res.sendStatus(503);
+  }
+
+  return res.send('ok');
+});
+
+app.get('/up', (req, res) => {
+  return res.send('ok');
+});
+
+app.get('/health', (req, res) => {
+   if (fail_liveness) {
+    return res.sendStatus(503);
+  }
+
+  return res.send('ok');
+});
+
+if (delay_startup) {
+  const start = Date.now();
+  while (Date.now() - start < 60000) {
+    // Simulate a delay of 60 seconds
+  }
+}
+//--------------------------------Ʌ
+```
+
+**Liveness Probe**: A hung process hasn't exited, so Kubernetes considers it fine. **Liveness Probe is the only mechanism** that turns "hung" into "exited" which makes K8s restarts the hung container.
+
+**Readiness Probe**: Checks if the container is ready to accept traffic. If the readiness probe fails, the container will be removed from the list of endpoints
+that receive traffic, and the container remains **running**
+
+A probe only runs against a container that is **running**. When the process crashes, the container is already dead, and the kubelet restarts it before the probe could do anything.
+So when an app's unhandled's exceptions crashes the process, The container exits and Kubernetes restarts it according to restartPolicy (the default Always for Deployments). No liveness/Readiness probe is involved. You'll see the restart count rise and, if it keeps crashing, CrashLoopBackOff.
+
+So a question can be:
+
+*You have a legacy Java application that takes 2 minutes to initialize and accept connections. Once running, it is fast. You configured a Liveness Probe to check the /health endpoint every 10 seconds. However, the Pod keeps restarting indefinitely before it ever fully starts up. What is the best way to fix this?*
+
+The answer is:
+
+*Configure a Startup Probe to handle the slow initialization. The Startup Probe disables the Liveness and Readiness checks until it succeeds, giving the application the dedicated time it needs to warm up without being killed prematurely.*
+
+and if you asked why "Pod keeps restarting indefinitely before it ever fully starts up" that is because K8s restarts the container when first Liveness Probe fails, and this process repeats over and over again
+
+And missing a readiness probe can be reason why customers get 502 Bad Gateway errors for the first few minutes, and if you get confused by checking the pods, and they turn 'Green' and say 'Running' almost instantly, the underlyhing issue is the proxy picks a pod IP from the Service endpoints. Without a readiness probe, that list includes the pod that is still booting.
+
+
+===================================================================================================
+
+
+## Volume
+
+`emptyDir`: Ephemeral storage within the Pod. Follows the lifecycle of the Pod: **when the Pod is terminated, its contents are also deleted**
+
+```yml
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+    - name: empty-dir-writer
+      image: busybox:1.36.1
+      volumeMounts:
+        - name: temporary-storage     # <-------------- has to match volume's name
+          mountPath: /usr/share/temp  # <------------- automatically creates the mount directory inside the container if it doesn't already exist
+    - name: empty-dir-reader
+      image: busybox:1.36.1
+      volumeMounts:
+        - name: temporary-storage  # <-------------- has to match volume's name
+          mountPath: /temp
+          readOnly: true
+  volumes:
+    - name: temporary-storage      # <-----------------
+      emptyDir: {}
+```
+
+```yml
+Name:             empty-dir-demo
+...
+IP:               10.244.0.3
+IPs:
+  IP:  10.244.0.3
+Containers:
+  empty-dir-demo:
+    ...
+    Mounts:
+      /usr/share/ from temp-storage (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-xhfbx (ro)
+Conditions:
+  Type                        Status
+  PodReadyToStartContainers   True
+  Initialized                 True
+  Ready                       True
+  ContainersReady             True
+  PodScheduled                True
+Volumes:
+  temp-storage:
+    Type:       EmptyDir (a temporary directory that shares a pod's lifetime)
+    Medium:
+    SizeLimit:  <unset>
+  kube-api-access-xhfbx:
+    Type:                    Projected (a volume that contains injected data from multiple sources)
+    TokenExpirationSeconds:  3607
+    ConfigMapName:           kube-root-ca.crt
+    Optional:                false
+    DownwardAPI:             true
+...
+```
+```bash
+kubectl exec -it empty-dir-demo -c empty-dir-reader -- sh   # "--" separates kubectl options from the command to execute
+ # if you don't pass -c with container, K8s choose the first container (empty-dir-writer) defined at the yaml to represent the Pod
+```
+
+----------------------------------------------------------------------------------------
+
+`PersistentVolume` and `PersistentVolumeClaim`
+
+Think of it like renting an apartment.
+- PV = The actual apartment (physical storage available)
+- PVC = Your rental application (request for storage), so that Developers don't need to know the exact storage names such as local-volume.
+- Pod = The tenant (uses the storage)
+
+           ┌──────────────┐
+           │     PV       │
+           └──────┬───────┘
+                  │ 1:1
+           ┌──────▼───────┐
+           │     PVC      │
+           └──────┬───────┘
+                  │
+          ┌───────┴────────┐
+          ▼                ▼
+      ┌────────┐      ┌────────┐
+      │  Pod 1 │      │  Pod 2 │
+      └────────┘      └────────┘
+
+
+```yml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: local-volume
+spec:
+  capacity:
+    storage: 1Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-storage     # <--------------- can be any name like foo
+  local:
+    path: /mnt/disks/local1  # <----------- this folder needs to pre-exist on the node before creating the PV, you can create it using the following command
+                             # 1. minikube ssh  2. sudo mkdir -p /mnt/disks/local1  3. sudo chmod 777 /mnt/disks/local1
+                             # note that /mnt/disks/local1 is physical storage directory on the Minikube node, not inside your container.
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: ["minikube"] 
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: local-volume-claim
+spec:
+  resources:
+    requests:
+      storage: 1Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-storage
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: local-vol-pod
+  labels:
+    name: local-vol-pod
+spec:
+  containers:
+    - name: local-vol
+      image: busybox:1.36.1
+      command:
+        - 'sh'
+        - '-c'
+        - 'sleep 3600'
+      volumeMounts:
+        - name: local-volume
+          mountPath: /mnt/local
+  volumes:
+    - name: local-volume
+      persistentVolumeClaim:            # <------------------------------pod use claim
+        claimName: local-volume-claim
+```
+
+```bash
+$ kubectl get pv
+# NAME           CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS   CLAIM                        STORAGECLASS    VOLUMEATTRIBUTESCLASS   REASON   AGE
+# local-volume   1Gi        RWO            Retain           Bound    default/local-volume-claim   local-storage   <unset> 
+
+kubectl describe pv local-volume
+
+# Name:              local-volume
+# Labels:            <none>
+# Annotations:       pv.kubernetes.io/bound-by-controller: yes
+# Finalizers:        [kubernetes.io/pv-protection]
+# StorageClass:      local-storage
+# Status:            Bound
+# Claim:             default/local-volume-claim
+# Reclaim Policy:    Retain
+# Access Modes:      RWO
+# VolumeMode:        Filesystem
+# Capacity:          1Gi
+# Node Affinity:
+  # Required Terms:
+    # Term 0:        kubernetes.io/hostname in [minikube]
+# Message:
+# Source:
+    # Type:  LocalVolume (a persistent volume backed by local storage on a node)
+    # Path:  /mnt/disks/local1
+# Events:    <none>
+
+$ kubectl get pvc
+# NAME                 STATUS   VOLUME         CAPACITY   ACCESS MODES   STORAGECLASS    VOLUMEATTRIBUTESCLASS   AGE
+# local-volume-claim   Bound    local-volume   1Gi        RWO            local-storage   <unset>                 64m
+
+kubectl exec -it local-vol-pod -- sh  # <-------------------execute command inside container
+cd /mnt/local    # <----------container cannot see /mnt/disks/local1 folder which belongs to the host (minikube)
+echo "Hello from pod" > hello.txt
+
+minikube ssh
+cd /mnt/disks/local1
+ls  # <------------------------- show hello.txt
 ```

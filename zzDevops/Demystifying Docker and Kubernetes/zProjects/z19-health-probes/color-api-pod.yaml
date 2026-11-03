@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: color-api-pod
+  labels:
+    app: color-api-pod
+spec:
+  containers:
+  - name: color-api
+    image: slowjams/color-api:1.2.1  # <----------version of adding delay_startup, fail_liveness, fail_readiness
+    ports:
+      - containerPort: 80
+    startupProbe:
+      httpGet:
+        path: /up
+        port: 80
+      failureThreshold: 2
+      periodSeconds: 3
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: 80
+      failureThreshold: 3
+      periodSeconds: 10
+    env:
+      - name: DELAY_STARTUP
+        value: "false"
+      - name: FAIL_LIVENESS
+        value: "false"
+      # - name: FAIL_READINESS
+      #   value: "true"
+    resources:
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
