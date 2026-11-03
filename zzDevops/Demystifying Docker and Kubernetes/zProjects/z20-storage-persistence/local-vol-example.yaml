@@ -37,9 +37,9 @@ spec:
 apiVersion: v1
 kind: Pod
 metadata:
-  name: local-vol-pod2
+  name: local-vol-pod
   labels:
-    name: local-vol-pod2
+    name: local-vol-pod
 spec:
   containers:
     - name: local-vol
@@ -54,7 +54,7 @@ spec:
           cpu: '500m'
       volumeMounts:
         - name: local-volume
-          mountPath: /mnt/local
+          mountPath: /mnt/local   # <---------this is NOT node's /mnt/disks/local1
   volumes:
     - name: local-volume
       persistentVolumeClaim:

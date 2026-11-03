@@ -143,6 +143,8 @@ Kubernetes API
 
 ## Pod and Container
 
+K8s introduces the Pod because it needs a way to manage one or more containers as a single application unit. The key reason is that sometimes multiple containers need to work closely together and share resources, networking and storage. If K8s managed them as independent containers, it would need to manage their networking, storage sharing and lifecycle relationships separately.
+
 A pod can contain multiple containers, the norm is, a pod **only contains ONE main/app container**, other containers in the pod are only auxiliary containers that provides supporting functionality, containers insiding same Pod can use localhost to communicate with each other. 
 
 ```
@@ -1158,7 +1160,9 @@ And missing a readiness probe can be reason why customers get 502 Bad Gateway er
 
 ## Volume
 
-`emptyDir`: Ephemeral storage within the Pod. Follows the lifecycle of the Pod: **when the Pod is terminated, its contents are also deleted**
+`emptyDir`: K8s creates the volume on the Node's filesystem (`/mnt/node-data`), **NOT inside each container** and the container sees it through a mount, that's why multiple containers under a same pod can read same content
+
+Ephemeral storage within the Pod. Follows the lifecycle of the Pod: **when the Pod is terminated, its contents are also deleted**, so restart a Pod won't clear the volume
 
 ```yml
 apiVersion: v1
@@ -1178,41 +1182,9 @@ spec:
           readOnly: true
   volumes:
     - name: temporary-storage      # <-----------------
-      emptyDir: {}
+      emptyDir: {}                 # <-----------------can also use node's Mememory
 ```
 
-```yml
-Name:             empty-dir-demo
-...
-IP:               10.244.0.3
-IPs:
-  IP:  10.244.0.3
-Containers:
-  empty-dir-demo:
-    ...
-    Mounts:
-      /usr/share/ from temp-storage (rw)
-      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-xhfbx (ro)
-Conditions:
-  Type                        Status
-  PodReadyToStartContainers   True
-  Initialized                 True
-  Ready                       True
-  ContainersReady             True
-  PodScheduled                True
-Volumes:
-  temp-storage:
-    Type:       EmptyDir (a temporary directory that shares a pod's lifetime)
-    Medium:
-    SizeLimit:  <unset>
-  kube-api-access-xhfbx:
-    Type:                    Projected (a volume that contains injected data from multiple sources)
-    TokenExpirationSeconds:  3607
-    ConfigMapName:           kube-root-ca.crt
-    Optional:                false
-    DownwardAPI:             true
-...
-```
 ```bash
 kubectl exec -it empty-dir-demo -c empty-dir-reader -- sh   # "--" separates kubectl options from the command to execute
  # if you don't pass -c with container, K8s choose the first container (empty-dir-writer) defined at the yaml to represent the Pod
@@ -1241,6 +1213,7 @@ Think of it like renting an apartment.
       │  Pod 1 │      │  Pod 2 │
       └────────┘      └────────┘
 
+The PV/PVC subsystem provides an abstraction layer. Administrators (or dynamic provisioners) manage the physical storage (PVs), while developers consume it via abstract **claims** (PVCs), making applications portable across different clusters.
 
 ```yml
 apiVersion: v1
@@ -1253,13 +1226,14 @@ spec:
   volumeMode: Filesystem
   accessModes:
     - ReadWriteOnce
-  persistentVolumeReclaimPolicy: Retain
-  storageClassName: local-storage     # <--------------- can be any name like foo
+  persistentVolumeReclaimPolicy: Retain  # <--------------preserve the PV and its underlying data when the PVC is deleted
+  storageClassName: local-storage     # <---------- can be any name like foo, K8s treats storageClassName as a matching attribute during static provisioning
+                                      # for dynamic provisioning, then you need to create a storageClas object or use the default standard
   local:
     path: /mnt/disks/local1  # <----------- this folder needs to pre-exist on the node before creating the PV, you can create it using the following command
                              # 1. minikube ssh  2. sudo mkdir -p /mnt/disks/local1  3. sudo chmod 777 /mnt/disks/local1
                              # note that /mnt/disks/local1 is physical storage directory on the Minikube node, not inside your container.
-  nodeAffinity:
+  nodeAffinity:  # <-------remember there could be multiple nodes in a cluster, that's why we need nodeAffinity
     required:
       nodeSelectorTerms:
         - matchExpressions:
@@ -1296,12 +1270,14 @@ spec:
         - 'sleep 3600'
       volumeMounts:
         - name: local-volume
-          mountPath: /mnt/local
+          mountPath: /mnt/local       # <---------this is NOT node's /mnt/disks/local1
   volumes:
     - name: local-volume
       persistentVolumeClaim:            # <------------------------------pod use claim
         claimName: local-volume-claim
 ```
+note that `nodeAffinity` forces the Scheduler to place any Pod using a PVC bound to this volume onto the specific node (minikube in this case), because the data physically exists only on that node's local disk. Note that on the node, the directory such as /mnt/disks/local1 or /mnt/disks/ssd etc won't be created automatically, you as admins have to manually create the directory before applying PV/PVC YAML
+
 
 ```bash
 $ kubectl get pv
@@ -1341,4 +1317,196 @@ echo "Hello from pod" > hello.txt
 minikube ssh
 cd /mnt/disks/local1
 ls  # <------------------------- show hello.txt
+
+# now delete the claim, because of persistentVolumeReclaimPolicy: Retain, pv still persists
+kubectl delete pvc local-volume-claim
+# kubectl get pv
+# NAME           CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS     CLAIM                        STORAGECLASS    VOLUMEATTRIBUTESCLASS   REASON   AGE
+# local-volume   1Gi        RWO            Retain           Released   default/local-volume-claim   local-storage   <unset>                          15h
+
+# but that doesn't mean the pv can be reused in other claims
+kubectl apply -f local-vol-example.yaml   # <-------------------recreate the pvc
+kubectl get pv
+# NAME           CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS     CLAIM                        STORAGECLASS    VOLUMEATTRIBUTESCLASS   REASON   AGE
+# local-volume   1Gi        RWO            Retain           Released   default/local-volume-claim   local-storage   <unset>                          15h
+                                                        #      Ʌ
+                                                        #      │---------------status is still Released
+kubectl get pvc
+# NAME                 STATUS    VOLUME   CAPACITY   ACCESS MODES   STORAGECLASS    VOLUMEATTRIBUTESCLASS   AGE
+# local-volume-claim   Pending                                      local-storage   <unset>                 5m12s
+                   #      Ʌ
+                   #      |-------------------status is still Pending  
 ```
+even if you delete the PV, hello.txt still persist in the node's `/mnt/disks/local1`, it requires admin to manually to delete this folder or re-create a PV using this folder OR if the admin want to re-use this PV, remove its old PVC reference:
+
+```bash
+kubectl patch pv my-pv --type=json -p='[{"op":"remove","path":"/spec/claimRef"}]'
+```
+
+You may ask why K8s doesn't automatically made every Released PV available for the next PVC. This could cause serious problems, e.g. previous application's data could be exposed to next application because K8s cannot safely assume that the storage is ready for a new application, so the norm is:
+
+Stage	                                 PV Status	            What Happens
+------------------------------------------------------------------------------------------------------
+Application A uses PV	                 Bound	                Data is in use
+PVC deleted            	               Released	              Data is preserved
+Administrator checks data	             Released             	Decide whether to keep or clean the data
+Administrator removes old claimRef	   Available	            PV can be reused
+Application B claims PV	               Bound	                New application gets storage
+
+
+## Dynamically Provisioning PVs
+
+**Static provisioning** and **Dynamic Provisioning** is determined by who creates the PersistentVolume (PV) and when it is created,
+* Static provisioning — You create the PV manually (via apply PV YAML file)
+* Dynamic provisioning — YOu only create a PVC, then K8s creates the PV automatically
+
+```yml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dynamic-pvc-example
+spec:
+  resources:
+    requests:
+      storage: 1Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  # storageClassName: standard  # <----------------- optional, if not specified, default storage class will be used 
+```
+note that in a static PV, storageClassName acts as a matching label/identifier that K8s uses to match a PV with a PVC, while for dynamic PV, storageClassName needs to be default standard or a real StorageClass such as:
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: my-custom-storage
+provisioner: kubernetes.io/no-provisioner
+```
+
+```bash
+kubectl get pvc
+# NAME                  STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+# dynamic-pvc-example   Bound    pvc-86c916cb-a80e-483e-b82c-22b9b5c5eb55   1Gi        RWO            standard       <unset>                 19s
+
+kubect describe pv pvc-86c916cb-a80e-483e-b82c-22b9b5c5eb55
+# Name:            pvc-86c916cb-a80e-483e-b82c-22b9b5c5eb55
+# Labels:          <none>
+# Annotations:     hostPathProvisionerIdentity: 3d168954-a4f8-4b77-81f7-388bbbb4ce73
+                 # pv.kubernetes.io/provisioned-by: k8s.io/minikube-hostpath
+# Finalizers:      [kubernetes.io/pv-protection]
+# StorageClass:    standard
+# Status:          Bound
+# Claim:           default/dynamic-pvc-example
+# Reclaim Policy:  Delete
+# Access Modes:    RWO
+# VolumeMode:      Filesystem
+# Capacity:        1Gi
+# Node Affinity:   <none>
+# Message:
+# Source:
+    # Type:          HostPath (bare host directory volume)
+    # Path:          /tmp/hostpath-provisioner/default/dynamic-pvc-example  <-------------------------------the path in minikube node
+    # HostPathType:
+# Events:            <none>
+```
+
+if you delete the `dynamic-pvc-example` claim, it will be:
+```
+PVC deleted
+    |
+    v
+PV released
+    |
+    v
+Reclaim policy: Delete
+    |
+    v
+PV object deleted
+    |
+    v
+Underlying disk deleted (`/tmp/hostpath-provisioner/default/dynamic-pvc-example` becomes `/tmp/hostpath-provisioner/default/`)
+```
+So you should delete PVC instead of deleting PV directly. Deleting the PVC allows Kubernetes to follow the normal storage lifecycle and apply the PV's reclaim policy, that's why if you delete PV directly, the underlying /tmp/hostpath-provisioner/default/dynamic-pvc-example still surive. Actually if you manually delete a PV, the command prompt will be hanging (k8s prevents you deleting PV first) and force you to delete PVC first
+
+
+```bash
+kubectl get storageclass
+# NAME                 PROVISIONER                RECLAIMPOLICY   VOLUMEBINDINGMODE   ALLOWVOLUMEEXPANSION   AGE
+# standard (default)   k8s.io/minikube-hostpath   Delete          Immediate           false                  55d
+
+kubectl describe storageclass standard
+# Name:            standard
+# IsDefaultClass:  Yes          # <--------------------------------------
+# Annotations:     kubectl.kubernetes.io/last-applied-configuration={"apiVersion":"storage.k8s.io/v1","kind":"StorageClass","metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"},"labels":{"addonmanager.kubernetes.io/mode":"EnsureExists"},"name":"standard"},"provisioner":"k8s.io/# minikube-hostpath"},storageclass.kubernetes.io/is-default-class=true
+# Provisioner:           k8s.io/minikube-hostpath
+# Parameters:            <none>
+# AllowVolumeExpansion:  <unset>
+# MountOptions:          <none>
+# ReclaimPolicy:         Delete
+# VolumeBindingMode:     Immediate
+# Events:                <none>
+```
+For Static Provisioning, K8s can match the PV and PVC by their StorageClass name without requiring an actual StorageClass resource.
+
+For Dynamic Provisioning, StorageClass acts as a template that defines which storage provisioner (plugin) to use and what parameters (disk type, IOPS, replication) to pass to that provisioner when creating a new volume on demand. K8s looks up that StorageClass definition and uses the provisioner field defined there, for example, kubernetes.io/aws-ebs or a Container Storage Interface (CSI) driver to call the cloud provider API and create a new disk automatically.
+
+----------------------------------------------------------------------------------------
+
+`hostPath` volume
+
+hostPath is a Kubernetes volume type that allows a Pod to mount a directory or file from the Node's filesystem into a container directly
+Say your Minikube Node has this directory `/mnt/data`:
+
+```yml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hostpath-example
+spec:
+  containers:
+    - name: nginx
+      image: nginx
+      volumeMounts:
+        - name: my-volume
+          mountPath: /usr/share/nginx/html
+
+  volumes:
+    - name: my-volume
+      hostPath:
+        path: /mnt/data
+        type: DirectoryOrCreate
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
